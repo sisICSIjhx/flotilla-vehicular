@@ -55,81 +55,197 @@
 ### Tabla: `recorridos`
 
 ```sql
-CREATE TABLE recorridos (
+-- =========================================================
+-- EXTENSIONES
+-- =========================================================
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- =========================================================
+-- FUNCION GLOBAL PARA updated_at
+-- =========================================================
+CREATE OR REPLACE FUNCTION set_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- =========================================================
+-- TABLA: centros_costo
+-- =========================================================
+CREATE TABLE IF NOT EXISTS centros_costo (
+  id SERIAL PRIMARY KEY,
+  codigo VARCHAR(20) UNIQUE NOT NULL,
+  nombre VARCHAR(100) NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+-- =========================================================
+-- TABLA: conductores
+-- =========================================================
+CREATE TABLE IF NOT EXISTS conductores (
+  id SERIAL PRIMARY KEY,
+  nombre VARCHAR(100) NOT NULL,
+  numero_empleado VARCHAR(30) UNIQUE,
+  estado VARCHAR(20) NOT NULL DEFAULT 'activo',
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+
+  CONSTRAINT check_estado_conductor
+    CHECK (estado IN ('activo', 'inactivo'))
+);
+
+-- =========================================================
+-- TABLA: vehiculos
+-- =========================================================
+CREATE TABLE IF NOT EXISTS vehiculos (
+  codigo VARCHAR(20) PRIMARY KEY,
+  apodo VARCHAR(50),
+  marca VARCHAR(50),
+  modelo VARCHAR(50),
+  anio SMALLINT,
+  placa VARCHAR(20) UNIQUE,
+  numero_serie VARCHAR(50) UNIQUE,
+  capacidad_tanque_litros DECIMAL(8,2) NOT NULL,
+  centro_costo_id INTEGER REFERENCES centros_costo(id),
+  estado VARCHAR(20) NOT NULL DEFAULT 'activo',
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+
+  CONSTRAINT check_estado_vehiculo
+    CHECK (estado IN ('activo', 'inactivo')),
+
+  CONSTRAINT check_anio_vehiculo
+    CHECK (anio IS NULL OR anio BETWEEN 1980 AND 2100),
+
+  CONSTRAINT check_capacidad_tanque
+    CHECK (capacidad_tanque_litros > 0)
+);
+
+-- =========================================================
+-- TABLA: recorridos
+-- =========================================================
+CREATE TABLE IF NOT EXISTS recorridos (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  vehiculo_codigo VARCHAR(50) NOT NULL,
-  conductor VARCHAR(100) NOT NULL,
-  centro_costo VARCHAR(100) NOT NULL,
-  
+  vehiculo_codigo VARCHAR(20) NOT NULL,
+  conductor_id INTEGER NOT NULL,
+  centro_costo_id INTEGER NOT NULL,
+
   -- Datos de salida
-  fecha_salida TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  fecha_salida TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   km_salida INTEGER NOT NULL,
-  combustible_salida VARCHAR(20) NOT NULL,
+  combustible_salida SMALLINT NOT NULL,
   foto_salida_path TEXT NOT NULL,
-  
-  -- Datos de regreso (nullable hasta que se cierre)
+
+  -- Datos de regreso
   fecha_regreso TIMESTAMP WITH TIME ZONE,
   km_regreso INTEGER,
-  combustible_regreso VARCHAR(20),
+  combustible_regreso SMALLINT,
   foto_regreso_path TEXT,
-  litros_cargados DECIMAL(10, 2),
-  precio_litro DECIMAL(10, 2),
-  
+  litros_cargados DECIMAL(10,2),
+  precio_litro DECIMAL(10,2),
+
   -- Estado
-  estado VARCHAR(20) DEFAULT 'abierto', -- 'abierto' o 'cerrado'
-  
-  -- Timestamps de auditoría
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  
-  CONSTRAINT check_km_final_mayor_igual_inicial 
+  estado VARCHAR(20) NOT NULL DEFAULT 'abierto',
+
+  -- Auditoría
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+
+  CONSTRAINT fk_vehiculo_codigo
+    FOREIGN KEY (vehiculo_codigo) REFERENCES vehiculos(codigo),
+
+  CONSTRAINT fk_conductor_id
+    FOREIGN KEY (conductor_id) REFERENCES conductores(id),
+
+  CONSTRAINT fk_centro_costo_id
+    FOREIGN KEY (centro_costo_id) REFERENCES centros_costo(id),
+
+  CONSTRAINT check_km_salida
+    CHECK (km_salida >= 0),
+
+  CONSTRAINT check_km_final_mayor_igual_inicial
     CHECK (km_regreso IS NULL OR km_regreso >= km_salida),
-  CONSTRAINT check_estado_valido 
+
+  CONSTRAINT check_combustible_salida
+    CHECK (combustible_salida BETWEEN 0 AND 8),
+
+  CONSTRAINT check_combustible_regreso
+    CHECK (combustible_regreso IS NULL OR combustible_regreso BETWEEN 0 AND 8),
+
+  CONSTRAINT check_litros_cargados
+    CHECK (litros_cargados IS NULL OR litros_cargados >= 0),
+
+  CONSTRAINT check_precio_litro
+    CHECK (precio_litro IS NULL OR precio_litro >= 0),
+
+  CONSTRAINT check_estado_valido
     CHECK (estado IN ('abierto', 'cerrado'))
 );
 
--- Índices para queries frecuentes
-CREATE INDEX idx_vehiculo_codigo ON recorridos(vehiculo_codigo);
-CREATE INDEX idx_estado ON recorridos(estado);
-CREATE INDEX idx_vehiculo_estado ON recorridos(vehiculo_codigo, estado);
-CREATE INDEX idx_fecha_salida ON recorridos(fecha_salida);
-```
+-- =========================================================
+-- INDICES
+-- =========================================================
 
-### Tabla: `vehiculos` (opcional pero recomendada)
+CREATE INDEX IF NOT EXISTS idx_recorridos_vehiculo_codigo
+  ON recorridos(vehiculo_codigo);
 
-```sql
-CREATE TABLE vehiculos (
-  codigo VARCHAR(50) PRIMARY KEY,
-  marca_modelo VARCHAR(100),
-  placa VARCHAR(20) UNIQUE,
-  estado VARCHAR(20) DEFAULT 'activo', -- 'activo' o 'inactivo'
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
+CREATE INDEX IF NOT EXISTS idx_recorridos_estado
+  ON recorridos(estado);
 
--- Agregar restricción de clave foránea a recorridos
-ALTER TABLE recorridos 
-ADD CONSTRAINT fk_vehiculo_codigo 
-FOREIGN KEY (vehiculo_codigo) REFERENCES vehiculos(codigo);
-```
+CREATE INDEX IF NOT EXISTS idx_recorridos_vehiculo_estado
+  ON recorridos(vehiculo_codigo, estado);
 
-### Tabla: `centros_costo` (datos maestros)
+CREATE INDEX IF NOT EXISTS idx_recorridos_fecha_salida
+  ON recorridos(fecha_salida);
 
-```sql
-CREATE TABLE centros_costo (
-  id SERIAL PRIMARY KEY,
-  codigo VARCHAR(50) UNIQUE NOT NULL,
-  nombre VARCHAR(100) NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
+CREATE INDEX IF NOT EXISTS idx_recorridos_conductor_id
+  ON recorridos(conductor_id);
 
--- Datos de ejemplo
-INSERT INTO centros_costo (codigo, nombre) VALUES
-('CC001', 'Centro Administrativo'),
-('CC002', 'Centro de Distribución'),
-('CC003', 'Centro de Servicio'),
-('CC004', 'Depósito Regional'),
-('CC005', 'Otra ubicación');
+CREATE INDEX IF NOT EXISTS idx_recorridos_centro_costo_id
+  ON recorridos(centro_costo_id);
+
+CREATE INDEX IF NOT EXISTS idx_vehiculos_placa
+  ON vehiculos(placa);
+
+CREATE INDEX IF NOT EXISTS idx_vehiculos_numero_serie
+  ON vehiculos(numero_serie);
+
+CREATE INDEX IF NOT EXISTS idx_vehiculos_centro_costo
+  ON vehiculos(centro_costo_id);
+
+CREATE INDEX IF NOT EXISTS idx_conductores_nombre
+  ON conductores(nombre);
+
+-- =========================================================
+-- REGLA CRITICA:
+-- SOLO UN RECORRIDO ABIERTO POR VEHICULO
+-- =========================================================
+CREATE UNIQUE INDEX IF NOT EXISTS ux_recorrido_abierto_por_vehiculo
+  ON recorridos(vehiculo_codigo)
+  WHERE estado = 'abierto';
+
+-- =========================================================
+-- TRIGGERS updated_at
+-- =========================================================
+DROP TRIGGER IF EXISTS trg_vehiculos_updated_at ON vehiculos;
+CREATE TRIGGER trg_vehiculos_updated_at
+BEFORE UPDATE ON vehiculos
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
+DROP TRIGGER IF EXISTS trg_recorridos_updated_at ON recorridos;
+CREATE TRIGGER trg_recorridos_updated_at
+BEFORE UPDATE ON recorridos
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
+
+DROP TRIGGER IF EXISTS trg_conductores_updated_at ON conductores;
+CREATE TRIGGER trg_conductores_updated_at
+BEFORE UPDATE ON conductores
+FOR EACH ROW
+EXECUTE FUNCTION set_updated_at();
 ```
 
 ### Campos Calculados (No se almacenan, se calculan en el frontend/query)
