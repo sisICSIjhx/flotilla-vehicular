@@ -9,6 +9,14 @@ export function buildFotoPath(
   return `vehiculos/${vehiculoCodigo}/recorridos/${recorridoId}/${tipo}.jpg`
 }
 
+export function buildFotoParadaPath(
+  vehiculoCodigo: string,
+  recorridoId: string,
+  orden: number
+): string {
+  return `vehiculos/${vehiculoCodigo}/recorridos/${recorridoId}/parada_${orden}.jpg`
+}
+
 export async function subirFoto(path: string, file: File): Promise<string> {
   const { data, error } = await supabase.storage
     .from(STORAGE_BUCKET)

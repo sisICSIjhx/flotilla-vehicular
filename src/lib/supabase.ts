@@ -9,7 +9,7 @@ if (!supabaseUrl || !supabaseAnonKey) {
 
 // =========================================================
 // TIPOS DEL MODELO DE DATOS
-// Refleja exactamente el schema en CLAUDE.md
+// Refleja exactamente el schema en CLAUDE.md (versión 5)
 // =========================================================
 
 // combustible_salida / combustible_regreso: SMALLINT 0-8
@@ -18,12 +18,21 @@ export type CombustibleNivel = 0 | 2 | 4 | 6 | 8
 export type RecorridoEstado = 'abierto' | 'cerrado'
 export type VehiculoEstado = 'activo' | 'inactivo'
 export type ConductorEstado = 'activo' | 'inactivo'
+export type ConductorOrigen = 'catalogo' | 'manual'
+export type CentroCostoEstado = 'activo' | 'inactivo'
+export type CentroCostoOrigen = 'catalogo' | 'manual'
+export type ParadaEstado = 'pendiente' | 'completada'
 
 export interface CentroCosto {
   id: number
   codigo: string
   nombre: string
+  estado: CentroCostoEstado
+  origen: CentroCostoOrigen
+  es_eventual: boolean
+  observaciones: string | null
   created_at: string
+  updated_at: string
 }
 
 export interface Conductor {
@@ -31,6 +40,9 @@ export interface Conductor {
   nombre: string
   numero_empleado: string | null
   estado: ConductorEstado
+  origen: ConductorOrigen
+  es_eventual: boolean
+  observaciones: string | null
   created_at: string
   updated_at: string
 }
@@ -44,6 +56,7 @@ export interface Vehiculo {
   placa: string | null
   numero_serie: string | null
   capacidad_tanque_litros: number
+  km_actual: number
   centro_costo_id: number | null
   estado: VehiculoEstado
   created_at: string
@@ -55,6 +68,9 @@ export interface Recorrido {
   vehiculo_codigo: string
   conductor_id: number
   centro_costo_id: number
+
+  // Configuración
+  usa_paradas: boolean
 
   // Salida
   fecha_salida: string
@@ -75,9 +91,33 @@ export interface Recorrido {
   updated_at: string
 }
 
+export interface RecorridoParada {
+  id: string
+  recorrido_id: string
+  orden: number
+  centro_costo_id: number
+
+  // Datos de la parada (null hasta completar)
+  fecha_parada: string | null
+  km_parada: number | null
+  combustible_parada: CombustibleNivel | null
+  foto_parada_path: string | null
+  litros_cargados: number | null
+  precio_litro: number | null
+
+  estado: ParadaEstado
+  created_at: string
+  updated_at: string
+}
+
 // Tipo extendido con joins para mostrar en UI
 export interface RecorridoConDetalle extends Recorrido {
   conductores: Pick<Conductor, 'id' | 'nombre'>
+  centros_costo: Pick<CentroCosto, 'id' | 'nombre' | 'codigo'>
+}
+
+// Parada con join del centro de costo
+export interface RecorridoParadaConDetalle extends RecorridoParada {
   centros_costo: Pick<CentroCosto, 'id' | 'nombre' | 'codigo'>
 }
 
@@ -86,8 +126,8 @@ export type Database = {
     Tables: {
       centros_costo: {
         Row: CentroCosto
-        Insert: Omit<CentroCosto, 'id' | 'created_at'>
-        Update: Partial<Omit<CentroCosto, 'id' | 'created_at'>>
+        Insert: Omit<CentroCosto, 'id' | 'created_at' | 'updated_at'>
+        Update: Partial<Omit<CentroCosto, 'id' | 'created_at' | 'updated_at'>>
         Relationships: []
       }
       conductores: {
@@ -104,9 +144,14 @@ export type Database = {
       }
       recorridos: {
         Row: Recorrido
-        // id es opcional: Supabase lo genera si no se pasa, pero podemos pre-generarlo
         Insert: Omit<Recorrido, 'created_at' | 'updated_at'> & { id?: string }
         Update: Partial<Omit<Recorrido, 'id' | 'created_at' | 'updated_at'>>
+        Relationships: []
+      }
+      recorridos_paradas: {
+        Row: RecorridoParada
+        Insert: Omit<RecorridoParada, 'created_at' | 'updated_at'> & { id?: string }
+        Update: Partial<Omit<RecorridoParada, 'id' | 'created_at' | 'updated_at'>>
         Relationships: []
       }
     }

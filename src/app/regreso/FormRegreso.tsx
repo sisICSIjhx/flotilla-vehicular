@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
-import { supabase, type Recorrido } from '@/lib/supabase'
+import { supabase, type Recorrido, type RecorridoParadaConDetalle } from '@/lib/supabase'
 import { comprimirFoto } from '@/lib/imageCompression'
 import { COMBUSTIBLE_NIVELES, combustibleLabel } from '@/lib/constants'
 import { buildFotoPath, subirFoto } from '@/utils/storage'
@@ -29,6 +29,7 @@ export default function FormRegreso() {
   const recorridoId = searchParams.get('recorrido') ?? ''
 
   const [recorrido, setRecorrido] = useState<Recorrido | null>(null)
+  const [paradas, setParadas] = useState<RecorridoParadaConDetalle[]>([])
   const [cargando, setCargando] = useState(true)
   const [errorGeneral, setErrorGeneral] = useState<string | null>(null)
 
@@ -61,14 +62,39 @@ export default function FormRegreso() {
 
       if (error || !data) {
         setErrorGeneral('No se encontró un recorrido abierto para este vehículo.')
-      } else {
-        setRecorrido(data)
+        setCargando(false)
+        return
       }
+
+      const rec = data as Recorrido
+      setRecorrido(rec)
+
+      // Si el recorrido tiene paradas, cargarlas para mostrar resumen
+      if (rec.usa_paradas) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: paradasData } = await (supabase.from('recorridos_paradas') as any)
+          .select('*, centros_costo(nombre, codigo)')
+          .eq('recorrido_id', recorridoId)
+          .order('orden', { ascending: true })
+
+        setParadas((paradasData ?? []) as RecorridoParadaConDetalle[])
+      }
+
       setCargando(false)
     }
 
     cargarRecorrido()
   }, [vehiculoCodigo, recorridoId])
+
+  // KM mínimo para el regreso: el mayor entre km_salida y el km de la última parada completada
+  const kmMinRegreso = paradas.length > 0
+    ? Math.max(
+        recorrido?.km_salida ?? 0,
+        ...paradas
+          .filter((p) => p.estado === 'completada' && p.km_parada != null)
+          .map((p) => p.km_parada as number)
+      )
+    : (recorrido?.km_salida ?? 0)
 
   function validar(): boolean {
     const errs: Errores = {}
@@ -76,8 +102,8 @@ export default function FormRegreso() {
 
     if (!kmRegreso || km < 0) {
       errs.km_regreso = 'Ingresa los KM de regreso'
-    } else if (recorrido && km < recorrido.km_salida) {
-      errs.km_regreso = `Debe ser mayor o igual a ${recorrido.km_salida.toLocaleString()} KM`
+    } else if (km < kmMinRegreso) {
+      errs.km_regreso = `Debe ser mayor o igual a ${kmMinRegreso.toLocaleString()} KM`
     }
     if (!combustible) errs.combustible = 'Selecciona el nivel de combustible'
     if (!foto) errs.foto = 'La foto del tablero es obligatoria'
@@ -172,20 +198,44 @@ export default function FormRegreso() {
           </div>
         )}
 
+        {/* Resumen de paradas si el recorrido las tuvo */}
+        {recorrido?.usa_paradas && paradas.length > 0 && (
+          <div className="bg-purple-50 border border-purple-200 rounded-2xl px-4 py-3 space-y-2 text-sm">
+            <p className="font-semibold text-purple-800">Paradas del recorrido</p>
+            {paradas.map((p) => (
+              <div key={p.id} className="flex items-center justify-between">
+                <div>
+                  <span className="text-purple-700 font-medium">#{p.orden} </span>
+                  <span className="text-purple-700">{p.centros_costo?.nombre ?? '—'}</span>
+                </div>
+                <span
+                  className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                    p.estado === 'completada'
+                      ? 'bg-green-100 text-green-700'
+                      : 'bg-yellow-100 text-yellow-700'
+                  }`}
+                >
+                  {p.estado === 'completada' ? 'Completada' : 'Pendiente'}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
         <Input
           label="KM actuales del odómetro"
           type="number"
-          min={recorrido?.km_salida ?? 0}
+          min={kmMinRegreso}
           value={kmRegreso}
           onChange={(e) => setKmRegreso(e.target.value)}
-          placeholder={`Mín: ${recorrido?.km_salida?.toLocaleString() ?? 0}`}
+          placeholder={`Mín: ${kmMinRegreso.toLocaleString()}`}
           inputMode="numeric"
           error={errores.km_regreso}
         />
 
         {kmRegreso && recorrido && Number(kmRegreso) >= recorrido.km_salida && (
           <p className="text-sm text-green-700 bg-green-50 rounded-xl px-3 py-2">
-            KM recorridos: <strong>{(Number(kmRegreso) - recorrido.km_salida).toLocaleString()}</strong>
+            KM recorridos totales: <strong>{(Number(kmRegreso) - recorrido.km_salida).toLocaleString()}</strong>
           </p>
         )}
 
@@ -206,7 +256,7 @@ export default function FormRegreso() {
 
         {/* Carga de combustible (opcional) */}
         <div className="bg-gray-50 rounded-2xl border border-gray-200 p-4 space-y-4">
-          <p className="text-sm font-medium text-gray-700">Carga de combustible (opcional)</p>
+          <p className="text-sm font-medium text-gray-700">Carga de combustible en regreso (opcional)</p>
           <Input
             label="Litros cargados"
             type="number"

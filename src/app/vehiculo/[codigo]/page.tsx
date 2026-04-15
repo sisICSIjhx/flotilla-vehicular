@@ -2,12 +2,13 @@
 
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { supabase, type Recorrido, type Vehiculo } from '@/lib/supabase'
+import { supabase, type Recorrido, type Vehiculo, type RecorridoParada } from '@/lib/supabase'
 import Loading from '@/components/common/Loading'
 import Button from '@/components/common/Button'
 import { formatFecha } from '@/utils/formatters'
 import { combustibleLabel } from '@/lib/constants'
 
+type SiguienteAccion = 'salida' | 'parada' | 'regreso'
 type Estado = 'cargando' | 'no_encontrado' | 'disponible' | 'en_ruta'
 
 export default function VehiculoPage() {
@@ -18,6 +19,9 @@ export default function VehiculoPage() {
   const [estado, setEstado] = useState<Estado>('cargando')
   const [vehiculo, setVehiculo] = useState<Vehiculo | null>(null)
   const [recorridoAbierto, setRecorridoAbierto] = useState<Recorrido | null>(null)
+  const [siguienteAccion, setSiguienteAccion] = useState<SiguienteAccion>('salida')
+  const [paradaPendiente, setParadaPendiente] = useState<RecorridoParada | null>(null)
+  const [nombreCentroPendiente, setNombreCentroPendiente] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -35,7 +39,7 @@ export default function VehiculoPage() {
           return
         }
 
-        setVehiculo(veh)
+        setVehiculo(veh as Vehiculo)
 
         // 2. Buscar recorrido abierto
         const { data: rec } = await supabase
@@ -45,11 +49,36 @@ export default function VehiculoPage() {
           .eq('estado', 'abierto')
           .maybeSingle()
 
-        if (rec) {
-          setRecorridoAbierto(rec)
-          setEstado('en_ruta')
-        } else {
+        if (!rec) {
           setEstado('disponible')
+          setSiguienteAccion('salida')
+          return
+        }
+
+        const recorrido = rec as Recorrido
+        setRecorridoAbierto(recorrido)
+        setEstado('en_ruta')
+
+        // 3. Si tiene paradas, verificar cuál es la siguiente acción
+        if (recorrido.usa_paradas) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: paradas } = await (supabase.from('recorridos_paradas') as any)
+            .select('*, centros_costo(nombre)')
+            .eq('recorrido_id', recorrido.id)
+            .eq('estado', 'pendiente')
+            .order('orden', { ascending: true })
+            .limit(1)
+
+          if (paradas && paradas.length > 0) {
+            const proxima = paradas[0] as RecorridoParada & { centros_costo: { nombre: string } }
+            setParadaPendiente(proxima)
+            setNombreCentroPendiente(proxima.centros_costo?.nombre ?? null)
+            setSiguienteAccion('parada')
+          } else {
+            setSiguienteAccion('regreso')
+          }
+        } else {
+          setSiguienteAccion('regreso')
         }
       } catch {
         setError('Error al verificar el vehículo. Intenta de nuevo.')
@@ -58,6 +87,18 @@ export default function VehiculoPage() {
 
     verificar()
   }, [codigo])
+
+  function handleAccion() {
+    if (!recorridoAbierto) return
+
+    if (siguienteAccion === 'parada' && paradaPendiente) {
+      router.push(
+        `/parada?vehiculo=${codigo}&recorrido=${recorridoAbierto.id}&parada=${paradaPendiente.id}&orden=${paradaPendiente.orden}`
+      )
+    } else {
+      router.push(`/regreso?vehiculo=${codigo}&recorrido=${recorridoAbierto.id}`)
+    }
+  }
 
   if (estado === 'cargando') {
     return (
@@ -113,6 +154,11 @@ export default function VehiculoPage() {
             {vehiculo?.placa && (
               <p className="text-sm text-gray-600">Placa: <strong>{vehiculo.placa}</strong></p>
             )}
+            {vehiculo && vehiculo.km_actual > 0 && (
+              <p className="text-sm text-gray-600">
+                KM actual: <strong>{vehiculo.km_actual.toLocaleString()}</strong>
+              </p>
+            )}
             <Button onClick={() => router.push(`/salida?vehiculo=${codigo}`)}>
               Registrar salida
             </Button>
@@ -142,12 +188,33 @@ export default function VehiculoPage() {
               </div>
             </div>
 
+            {/* Indicador de paradas si aplica */}
+            {recorridoAbierto.usa_paradas && (
+              <div className="bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 text-sm">
+                {siguienteAccion === 'parada' && paradaPendiente ? (
+                  <div>
+                    <p className="font-medium text-blue-800">
+                      Parada #{paradaPendiente.orden} pendiente
+                    </p>
+                    {nombreCentroPendiente && (
+                      <p className="text-blue-600">{nombreCentroPendiente}</p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-blue-800 font-medium">
+                    Todas las paradas completadas
+                  </p>
+                )}
+              </div>
+            )}
+
             <Button
-              onClick={() =>
-                router.push(`/regreso?vehiculo=${codigo}&recorrido=${recorridoAbierto.id}`)
-              }
+              variant={siguienteAccion === 'parada' ? 'secondary' : 'primary'}
+              onClick={handleAccion}
             >
-              Registrar regreso
+              {siguienteAccion === 'parada'
+                ? `Completar parada #${paradaPendiente?.orden}`
+                : 'Registrar regreso'}
             </Button>
           </div>
         )}

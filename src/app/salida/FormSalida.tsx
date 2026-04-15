@@ -13,12 +13,30 @@ import PhotoCapture from '@/components/forms/PhotoCapture'
 import ErrorMessage from '@/components/common/ErrorMessage'
 import Loading from '@/components/common/Loading'
 
+// Cada parada puede elegir de la lista o escribir un nombre libre
+interface ParadaConfig {
+  mode: 'lista' | 'manual'
+  centroId: string  // cuando mode = 'lista'
+  nombre: string    // cuando mode = 'manual'
+}
+
 interface Errores {
   conductor?: string
   centro_costo?: string
   km_salida?: string
   combustible?: string
   foto?: string
+  paradas?: string
+}
+
+// Resuelve el ID de un centro de costo:
+// si viene de la lista devuelve el número directamente,
+// si es manual llama a la función RPC que crea el registro temporal.
+async function resolverCentroCostoId(config: { mode: 'lista' | 'manual'; centroId: string; nombre: string }): Promise<number> {
+  if (config.mode === 'lista') return Number(config.centroId)
+  const { data, error } = await supabase.rpc('get_or_create_centro_costo', { p_nombre: config.nombre.trim() })
+  if (error) throw new Error(error.message)
+  return data as number
 }
 
 export default function FormSalida() {
@@ -30,13 +48,28 @@ export default function FormSalida() {
   const [centrosCosto, setCentrosCosto] = useState<CentroCosto[]>([])
   const [cargandoDatos, setCargandoDatos] = useState(true)
   const [errorGeneral, setErrorGeneral] = useState<string | null>(null)
+  const [kmBase, setKmBase] = useState<number>(0)
 
-  // Campos del formulario
+  // ── Conductor ──────────────────────────────────────
+  const [conductorMode, setConductorMode] = useState<'lista' | 'manual'>('lista')
   const [conductorId, setConductorId] = useState('')
+  const [conductorNombre, setConductorNombre] = useState('')
+
+  // ── Centro de costo principal ──────────────────────
+  const [centroCostoMode, setCentroCostoMode] = useState<'lista' | 'manual'>('lista')
   const [centroCostoId, setCentroCostoId] = useState('')
+  const [centroCostoNombre, setCentroCostoNombre] = useState('')
+
+  // ── Otros campos ───────────────────────────────────
   const [kmSalida, setKmSalida] = useState('')
   const [combustible, setCombustible] = useState('')
   const [foto, setFoto] = useState<File | null>(null)
+
+  // ── Paradas intermedias ────────────────────────────
+  const [usaParadas, setUsaParadas] = useState(false)
+  const [paradasConfig, setParadasConfig] = useState<ParadaConfig[]>([
+    { mode: 'lista', centroId: '', nombre: '' },
+  ])
 
   const [errores, setErrores] = useState<Errores>({})
   const [enviando, setEnviando] = useState(false)
@@ -50,30 +83,90 @@ export default function FormSalida() {
     }
 
     async function cargarDatos() {
-      const [{ data: conds }, { data: centros }] = await Promise.all([
-        supabase.from('conductores').select('id, nombre, numero_empleado, estado, created_at, updated_at').eq('estado', 'activo').order('nombre'),
-        supabase.from('centros_costo').select('id, codigo, nombre, created_at').order('nombre'),
+      const [{ data: conds }, { data: centros }, { data: veh }] = await Promise.all([
+        // Solo conductores del catálogo (no eventuales/manuales)
+        supabase
+          .from('conductores')
+          .select('id, nombre, numero_empleado, estado, origen, es_eventual, observaciones, created_at, updated_at')
+          .eq('estado', 'activo')
+          .eq('es_eventual', false)
+          .order('nombre'),
+        // Solo centros del catálogo (no eventuales/manuales)
+        supabase
+          .from('centros_costo')
+          .select('id, codigo, nombre, estado, origen, es_eventual, observaciones, created_at, updated_at')
+          .eq('estado', 'activo')
+          .eq('es_eventual', false)
+          .order('nombre'),
+        supabase
+          .from('vehiculos')
+          .select('km_actual')
+          .eq('codigo', vehiculoCodigo)
+          .single(),
       ])
 
       setConductores(conds ?? [])
       setCentrosCosto(centros ?? [])
+      if (veh) setKmBase((veh as { km_actual: number }).km_actual)
       setCargandoDatos(false)
     }
 
     cargarDatos()
   }, [vehiculoCodigo])
 
+  // ── Helpers de paradas ─────────────────────────────
+  function agregarParada() {
+    setParadasConfig((prev) => [...prev, { mode: 'lista', centroId: '', nombre: '' }])
+  }
+
+  function quitarParada(index: number) {
+    setParadasConfig((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  function actualizarParada(index: number, patch: Partial<ParadaConfig>) {
+    setParadasConfig((prev) =>
+      prev.map((p, i) => (i === index ? { ...p, ...patch } : p))
+    )
+  }
+
+  // ── Validación ─────────────────────────────────────
   function validar(): boolean {
     const errs: Errores = {}
-    if (!conductorId) errs.conductor = 'Selecciona un conductor'
-    if (!centroCostoId) errs.centro_costo = 'Selecciona un centro de costo'
-    if (!kmSalida || Number(kmSalida) < 0) errs.km_salida = 'Ingresa los KM actuales'
+
+    if (conductorMode === 'lista' && !conductorId) {
+      errs.conductor = 'Selecciona un conductor'
+    } else if (conductorMode === 'manual' && !conductorNombre.trim()) {
+      errs.conductor = 'Escribe el nombre del conductor'
+    }
+
+    if (centroCostoMode === 'lista' && !centroCostoId) {
+      errs.centro_costo = 'Selecciona un destino'
+    } else if (centroCostoMode === 'manual' && !centroCostoNombre.trim()) {
+      errs.centro_costo = 'Escribe el nombre del destino'
+    }
+
+    const km = Number(kmSalida)
+    if (!kmSalida || km < 0) {
+      errs.km_salida = 'Ingresa los KM actuales'
+    } else if (km < kmBase) {
+      errs.km_salida = `Debe ser mayor o igual al KM actual del vehículo (${kmBase.toLocaleString()})`
+    }
+
     if (!combustible) errs.combustible = 'Selecciona el nivel de combustible'
     if (!foto) errs.foto = 'La foto del tablero es obligatoria'
+
+    if (usaParadas) {
+      const invalida = paradasConfig.some((p) =>
+        p.mode === 'lista' ? !p.centroId : !p.nombre.trim()
+      )
+      if (invalida) errs.paradas = 'Completa el destino de cada parada'
+    }
+
     setErrores(errs)
     return Object.keys(errs).length === 0
   }
 
+  // ── Submit ─────────────────────────────────────────
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!validar()) return
@@ -96,10 +189,27 @@ export default function FormSalida() {
         return
       }
 
-      // Generar ID para el recorrido (necesario antes de subir la foto)
-      const recorridoId = crypto.randomUUID()
+      // Resolver conductor (lista o RPC)
+      let conductorIdFinal: number
+      if (conductorMode === 'lista') {
+        conductorIdFinal = Number(conductorId)
+      } else {
+        const { data, error } = await supabase.rpc('get_or_create_conductor', {
+          p_nombre: conductorNombre.trim(),
+        })
+        if (error) throw new Error(error.message)
+        conductorIdFinal = data as number
+      }
 
-      // Comprimir y subir foto
+      // Resolver centro de costo principal (lista o RPC)
+      const centroCostoIdFinal = await resolverCentroCostoId({
+        mode: centroCostoMode,
+        centroId: centroCostoId,
+        nombre: centroCostoNombre,
+      })
+
+      // Generar ID y subir foto
+      const recorridoId = crypto.randomUUID()
       const fotoComprimida = await comprimirFoto(foto!)
       const fotoPath = buildFotoPath(vehiculoCodigo, recorridoId, 'salida')
       await subirFoto(fotoPath, fotoComprimida)
@@ -109,16 +219,34 @@ export default function FormSalida() {
       const { error } = await (supabase.from('recorridos') as any).insert({
         id: recorridoId,
         vehiculo_codigo: vehiculoCodigo,
-        conductor_id: Number(conductorId),
-        centro_costo_id: Number(centroCostoId),
+        conductor_id: conductorIdFinal,
+        centro_costo_id: centroCostoIdFinal,
         km_salida: Number(kmSalida),
         combustible_salida: Number(combustible),
         foto_salida_path: fotoPath,
+        usa_paradas: usaParadas,
         estado: 'abierto',
         fecha_salida: new Date().toISOString(),
       })
 
       if (error) throw new Error(error.message)
+
+      // Insertar paradas si aplica
+      if (usaParadas && paradasConfig.length > 0) {
+        // Resolver IDs de paradas (pueden ser manuales)
+        const idsParadas = await Promise.all(paradasConfig.map((p) => resolverCentroCostoId(p)))
+
+        const paradasPayload = idsParadas.map((centroId, idx) => ({
+          recorrido_id: recorridoId,
+          orden: idx + 1,
+          centro_costo_id: centroId,
+          estado: 'pendiente',
+        }))
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { error: errParadas } = await (supabase.from('recorridos_paradas') as any).insert(paradasPayload)
+        if (errParadas) throw new Error(errParadas.message)
+      }
 
       setExito(true)
       setTimeout(() => router.push(`/vehiculo/${vehiculoCodigo}`), 2000)
@@ -160,40 +288,88 @@ export default function FormSalida() {
       <form onSubmit={handleSubmit} className="flex-1 px-4 py-6 max-w-md mx-auto w-full space-y-5">
         {errorGeneral && <ErrorMessage mensaje={errorGeneral} />}
 
-        {conductores.length === 0 && (
-          <div className="rounded-xl bg-yellow-50 border border-yellow-200 px-4 py-3 text-sm text-yellow-800">
-            No hay conductores activos. Agrega conductores en la base de datos.
+        {kmBase > 0 && (
+          <div className="rounded-xl bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
+            KM actual del vehículo: <strong>{kmBase.toLocaleString()}</strong>
           </div>
         )}
 
-        <Select
-          label="Conductor"
-          value={conductorId}
-          onChange={(e) => setConductorId(e.target.value)}
-          options={conductores.map((c) => ({
-            value: c.id,
-            label: c.numero_empleado ? `${c.nombre} (${c.numero_empleado})` : c.nombre,
-          }))}
-          placeholder="Selecciona el conductor"
-          error={errores.conductor}
-        />
+        {/* ── Conductor ── */}
+        <div className="space-y-1">
+          {conductorMode === 'lista' ? (
+            <Select
+              label="Conductor"
+              value={conductorId}
+              onChange={(e) => setConductorId(e.target.value)}
+              options={conductores.map((c) => ({ value: c.id, label: c.nombre }))}
+              placeholder="Selecciona el conductor"
+              error={errores.conductor}
+            />
+          ) : (
+            <Input
+              label="Conductor"
+              type="text"
+              value={conductorNombre}
+              onChange={(e) => setConductorNombre(e.target.value)}
+              placeholder="Escribe el nombre completo"
+              error={errores.conductor}
+            />
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              setConductorMode((m) => (m === 'lista' ? 'manual' : 'lista'))
+              setConductorId('')
+              setConductorNombre('')
+            }}
+            className="text-xs text-blue-600 hover:text-blue-800"
+          >
+            {conductorMode === 'lista' ? '¿No está en la lista? Escribir nombre' : 'Seleccionar de la lista'}
+          </button>
+        </div>
 
-        <Select
-          label="Centro de costo"
-          value={centroCostoId}
-          onChange={(e) => setCentroCostoId(e.target.value)}
-          options={centrosCosto.map((c) => ({ value: c.id, label: c.nombre }))}
-          placeholder="Selecciona el centro de costo"
-          error={errores.centro_costo}
-        />
+        {/* ── Centro de costo principal ── */}
+        <div className="space-y-1">
+          {centroCostoMode === 'lista' ? (
+            <Select
+              label="Destino / Centro de costo"
+              value={centroCostoId}
+              onChange={(e) => setCentroCostoId(e.target.value)}
+              options={centrosCosto.map((c) => ({ value: c.id, label: c.nombre }))}
+              placeholder="Selecciona el destino"
+              error={errores.centro_costo}
+            />
+          ) : (
+            <Input
+              label="Destino / Centro de costo"
+              type="text"
+              value={centroCostoNombre}
+              onChange={(e) => setCentroCostoNombre(e.target.value)}
+              placeholder="Escribe el nombre del destino"
+              error={errores.centro_costo}
+            />
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              setCentroCostoMode((m) => (m === 'lista' ? 'manual' : 'lista'))
+              setCentroCostoId('')
+              setCentroCostoNombre('')
+            }}
+            className="text-xs text-blue-600 hover:text-blue-800"
+          >
+            {centroCostoMode === 'lista' ? '¿No está en la lista? Escribir destino' : 'Seleccionar de la lista'}
+          </button>
+        </div>
 
+        {/* ── KM y combustible ── */}
         <Input
           label="KM actuales del odómetro"
           type="number"
-          min={0}
+          min={kmBase}
           value={kmSalida}
           onChange={(e) => setKmSalida(e.target.value)}
-          placeholder="Ej: 45230"
+          placeholder={`Mín: ${kmBase.toLocaleString()}`}
           inputMode="numeric"
           error={errores.km_salida}
         />
@@ -213,8 +389,98 @@ export default function FormSalida() {
           error={errores.foto}
         />
 
+        {/* ── Paradas intermedias ── */}
+        <div className="bg-gray-50 rounded-2xl border border-gray-200 p-4 space-y-4">
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={usaParadas}
+              onChange={(e) => {
+                setUsaParadas(e.target.checked)
+                if (!e.target.checked) {
+                  setParadasConfig([{ mode: 'lista', centroId: '', nombre: '' }])
+                }
+              }}
+              className="w-5 h-5 rounded accent-blue-600"
+            />
+            <div>
+              <p className="text-sm font-medium text-gray-800">Recorrido con paradas intermedias</p>
+              <p className="text-xs text-gray-500">El vehículo visitará varios lugares antes de regresar</p>
+            </div>
+          </label>
+
+          {usaParadas && (
+            <div className="space-y-4 pt-1">
+              <p className="text-xs font-medium text-gray-600 uppercase tracking-wide">
+                Paradas (en orden de visita)
+              </p>
+
+              {paradasConfig.map((parada, idx) => (
+                <div key={idx} className="border border-gray-200 rounded-xl p-3 space-y-2 bg-white">
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-medium text-gray-500">Parada {idx + 1}</p>
+                    {paradasConfig.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => quitarParada(idx)}
+                        className="text-red-400 hover:text-red-600 text-sm"
+                      >
+                        Quitar
+                      </button>
+                    )}
+                  </div>
+
+                  {parada.mode === 'lista' ? (
+                    <Select
+                      label=""
+                      value={parada.centroId}
+                      onChange={(e) => actualizarParada(idx, { centroId: e.target.value })}
+                      options={centrosCosto.map((c) => ({ value: c.id, label: c.nombre }))}
+                      placeholder="Selecciona destino"
+                    />
+                  ) : (
+                    <Input
+                      label=""
+                      type="text"
+                      value={parada.nombre}
+                      onChange={(e) => actualizarParada(idx, { nombre: e.target.value })}
+                      placeholder="Escribe el nombre del destino"
+                    />
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      actualizarParada(idx, {
+                        mode: parada.mode === 'lista' ? 'manual' : 'lista',
+                        centroId: '',
+                        nombre: '',
+                      })
+                    }
+                    className="text-xs text-blue-600 hover:text-blue-800"
+                  >
+                    {parada.mode === 'lista' ? '¿No está en la lista? Escribir destino' : 'Seleccionar de la lista'}
+                  </button>
+                </div>
+              ))}
+
+              {errores.paradas && (
+                <p className="text-xs text-red-600">{errores.paradas}</p>
+              )}
+
+              <button
+                type="button"
+                onClick={agregarParada}
+                className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+              >
+                + Agregar parada
+              </button>
+            </div>
+          )}
+        </div>
+
         <div className="pt-2 pb-8">
-          <Button type="submit" loading={enviando} disabled={conductores.length === 0}>
+          <Button type="submit" loading={enviando}>
             Confirmar salida
           </Button>
         </div>
