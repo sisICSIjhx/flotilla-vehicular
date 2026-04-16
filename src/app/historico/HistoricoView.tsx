@@ -7,6 +7,7 @@ import { supabase } from '@/lib/supabase'
 import { calcKmRecorridos, calcImporte, calcLitrosConsumidos, calcRendimiento } from '@/lib/calculations'
 import { formatFecha, formatMoneda, formatDecimal } from '@/utils/formatters'
 import { combustibleLabel } from '@/lib/constants'
+import { getPublicUrl } from '@/utils/storage'
 import Loading from '@/components/common/Loading'
 import ErrorMessage from '@/components/common/ErrorMessage'
 
@@ -22,6 +23,8 @@ interface RecorridoHistorico {
   combustible_regreso: number | null
   litros_cargados: number | null
   precio_litro: number | null
+  foto_salida_path: string | null
+  foto_regreso_path: string | null
   conductores: { nombre: string } | null
   centros_costo: { nombre: string } | null
   vehiculos: { capacidad_tanque_litros: number } | null
@@ -45,6 +48,7 @@ export default function HistoricoView() {
 
   const [filtroVehiculo, setFiltroVehiculo] = useState('')
   const [filtroPeriodo, setFiltroPeriodo] = useState<Periodo>('todo')
+  const [fotoModal, setFotoModal] = useState<{ url: string; titulo: string } | null>(null)
 
   useEffect(() => {
     cargar()
@@ -61,7 +65,7 @@ export default function HistoricoView() {
         .select(`
           id, vehiculo_codigo, estado, fecha_salida, fecha_regreso,
           km_salida, km_regreso, combustible_salida, combustible_regreso,
-          litros_cargados, precio_litro,
+          litros_cargados, precio_litro, foto_salida_path, foto_regreso_path,
           conductores(nombre),
           centros_costo(nombre),
           vehiculos(capacidad_tanque_litros)
@@ -115,6 +119,41 @@ export default function HistoricoView() {
 
   return (
     <div className="min-h-screen flex flex-col">
+
+      {/* Modal de foto */}
+      {fotoModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          onClick={() => setFotoModal(null)}
+        >
+          {/* Fondo difuminado */}
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+          {/* Contenedor foto */}
+          <div
+            className="relative z-10 max-w-2xl w-full"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-white rounded-2xl overflow-hidden shadow-2xl">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+                <span className="text-sm font-semibold text-gray-700">{fotoModal.titulo}</span>
+                <button
+                  onClick={() => setFotoModal(null)}
+                  className="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors text-lg font-bold"
+                >
+                  ✕
+                </button>
+              </div>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={fotoModal.url}
+                alt={fotoModal.titulo}
+                className="w-full object-contain max-h-[75vh]"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       <header className="bg-blue-600 text-white px-4 py-5 shadow">
         <button onClick={() => router.push('/')} className="text-blue-200 text-sm mb-2">
           ← Inicio
@@ -197,6 +236,8 @@ export default function HistoricoView() {
                   <th className="px-3 py-3 text-right whitespace-nowrap">L. consumidos</th>
                   <th className="px-3 py-3 text-right whitespace-nowrap">Costo</th>
                   <th className="px-3 py-3 text-right whitespace-nowrap">Rend.</th>
+                  <th className="px-3 py-3 text-center whitespace-nowrap">Foto sal.</th>
+                  <th className="px-3 py-3 text-center whitespace-nowrap">Foto reg.</th>
                   <th className="px-3 py-3 text-center whitespace-nowrap">Estado</th>
                 </tr>
               </thead>
@@ -255,6 +296,42 @@ export default function HistoricoView() {
                       </td>
                       <td className="px-3 py-3 text-right whitespace-nowrap">
                         {rend != null ? `${formatDecimal(rend)} km/L` : '—'}
+                      </td>
+                      <td className="px-3 py-3 text-center whitespace-nowrap">
+                        {r.foto_salida_path ? (
+                          <button
+                            onClick={() => setFotoModal({
+                              url: getPublicUrl(r.foto_salida_path!),
+                              titulo: `Foto salida — ${r.vehiculo_codigo} · ${formatFecha(r.fecha_salida)}`,
+                            })}
+                            className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 transition-colors"
+                            title="Ver foto de salida"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                            </svg>
+                          </button>
+                        ) : (
+                          <span className="text-gray-300 text-xs">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-3 text-center whitespace-nowrap">
+                        {r.foto_regreso_path ? (
+                          <button
+                            onClick={() => setFotoModal({
+                              url: getPublicUrl(r.foto_regreso_path!),
+                              titulo: `Foto regreso — ${r.vehiculo_codigo} · ${r.fecha_regreso ? formatFecha(r.fecha_regreso) : ''}`,
+                            })}
+                            className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-green-50 hover:bg-green-100 text-green-600 transition-colors"
+                            title="Ver foto de regreso"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                            </svg>
+                          </button>
+                        ) : (
+                          <span className="text-gray-300 text-xs">—</span>
+                        )}
                       </td>
                       <td className="px-3 py-3 text-center whitespace-nowrap">
                         <span
