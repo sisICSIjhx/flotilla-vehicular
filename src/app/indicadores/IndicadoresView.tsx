@@ -31,7 +31,7 @@ import {
 } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { supabase } from '@/lib/supabase'
-import { calcKmRecorridos, calcImporte, calcRendimiento } from '@/lib/calculations'
+import { calcKmRecorridos, calcImporte, calcLitrosConsumidos, calcRendimiento } from '@/lib/calculations'
 import { formatMoneda, formatDecimal } from '@/utils/formatters'
 import Loading from '@/components/common/Loading'
 import ErrorMessage from '@/components/common/ErrorMessage'
@@ -51,8 +51,11 @@ interface RecorridoCerrado {
   fecha_salida: string
   km_salida: number
   km_regreso: number
+  combustible_salida: number
+  combustible_regreso: number
   litros_cargados: number | null
   precio_litro: number | null
+  vehiculos: { capacidad_tanque_litros: number } | null
 }
 
 interface StatCard {
@@ -183,7 +186,7 @@ export default function IndicadoresView() {
       const { desde, hasta } = calcularRango()
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data, error: qError } = await (supabase.from('recorridos') as any)
-        .select('vehiculo_codigo, fecha_salida, km_salida, km_regreso, litros_cargados, precio_litro')
+        .select('vehiculo_codigo, fecha_salida, km_salida, km_regreso, combustible_salida, combustible_regreso, litros_cargados, precio_litro, vehiculos(capacidad_tanque_litros)')
         .eq('estado', 'cerrado')
         .gte('fecha_salida', desde)
         .lte('fecha_salida', hasta)
@@ -212,12 +215,22 @@ export default function IndicadoresView() {
 
   // ── Cálculos globales ──────────────────────────────────────────────────────
   const totalKm = datosFiltrados.reduce((acc, r) => acc + calcKmRecorridos(r.km_salida, r.km_regreso), 0)
-  const totalLitros = datosFiltrados.reduce((acc, r) => acc + (r.litros_cargados ?? 0), 0)
   const totalCosto = datosFiltrados.reduce(
     (acc, r) => acc + (r.litros_cargados && r.precio_litro ? calcImporte(r.litros_cargados, r.precio_litro) : 0),
     0
   )
-  const rendimientoPromedio = calcRendimiento(totalKm, totalLitros)
+  // Litros consumidos = balance real del tanque, NO solo recargas
+  const totalLitrosConsumidos = datosFiltrados.reduce((acc, r) => {
+    if (!r.vehiculos?.capacidad_tanque_litros) return acc
+    const l = calcLitrosConsumidos(
+      r.vehiculos.capacidad_tanque_litros,
+      r.combustible_salida,
+      r.combustible_regreso,
+      r.litros_cargados ?? 0
+    )
+    return l > 0 ? acc + l : acc
+  }, 0)
+  const rendimientoPromedio = calcRendimiento(totalKm, totalLitrosConsumidos)
 
   const stats: StatCard[] = [
     { emoji: '🚗', label: 'Recorridos', valor: datosFiltrados.length.toString() },
@@ -257,11 +270,18 @@ export default function IndicadoresView() {
 
   // ── Rendimiento por período ────────────────────────────────────────────────
   const rendAcum = datosFiltrados.reduce<Record<string, { km: number; litros: number }>>((acc, r) => {
-    if (!r.litros_cargados) return acc
+    if (!r.vehiculos?.capacidad_tanque_litros) return acc
+    const litrosConsumidos = calcLitrosConsumidos(
+      r.vehiculos.capacidad_tanque_litros,
+      r.combustible_salida,
+      r.combustible_regreso,
+      r.litros_cargados ?? 0
+    )
+    if (litrosConsumidos <= 0) return acc
     const key = keyPeriodo(r.fecha_salida)
     if (!acc[key]) acc[key] = { km: 0, litros: 0 }
     acc[key].km += calcKmRecorridos(r.km_salida, r.km_regreso)
-    acc[key].litros += r.litros_cargados
+    acc[key].litros += litrosConsumidos
     return acc
   }, {})
   const rendLabels = Object.keys(rendAcum)
@@ -269,6 +289,15 @@ export default function IndicadoresView() {
     rendAcum[k].litros > 0 ? Math.round((rendAcum[k].km / rendAcum[k].litros) * 100) / 100 : 0
   )
   const hayDatosRendimiento = rendLabels.length > 0
+
+  // ── Litros recargados por período ──────────────────────────────────────────
+  const litrosRecPorPeriodo = datosFiltrados.reduce<Record<string, number>>((acc, r) => {
+    if (!r.litros_cargados) return acc
+    const key = keyPeriodo(r.fecha_salida)
+    acc[key] = (acc[key] ?? 0) + r.litros_cargados
+    return acc
+  }, {})
+  const hayDatosLitrosRec = Object.keys(litrosRecPorPeriodo).length > 0
 
   // ── Labels ─────────────────────────────────────────────────────────────────
   const labelPeriodo = esPorDia ? 'KM por día' : 'KM por mes'
@@ -529,6 +558,46 @@ export default function IndicadoresView() {
               </div>
             )}
 
+            {/* Litros consumidos por período */}
+            {hayDatosRendimiento && (
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 space-y-3">
+                <h2 className="text-sm font-semibold text-gray-700">
+                  Litros consumidos {esPorDia ? 'por día' : 'por mes'}
+                </h2>
+                <Chart
+                  type={tipoGrafica === 'tendencia' ? 'line' : 'bar'}
+                  data={{
+                    labels: rendLabels,
+                    datasets: buildDatasets(
+                      rendLabels.map((k) => Math.round(rendAcum[k].litros * 100) / 100),
+                      'Litros consumidos', 'rgba(239, 68, 68, 0.7)', tipoGrafica
+                    ),
+                  }}
+                  options={tipoGrafica === 'ambas' ? chartOptionsConLeyenda : chartOptions}
+                />
+              </div>
+            )}
+
+            {/* Litros recargados por período */}
+            {hayDatosLitrosRec && (
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 space-y-3">
+                <h2 className="text-sm font-semibold text-gray-700">
+                  Litros recargados {esPorDia ? 'por día' : 'por mes'}
+                </h2>
+                <Chart
+                  type={tipoGrafica === 'tendencia' ? 'line' : 'bar'}
+                  data={{
+                    labels: Object.keys(litrosRecPorPeriodo),
+                    datasets: buildDatasets(
+                      Object.values(litrosRecPorPeriodo).map((v) => Math.round(v * 100) / 100),
+                      'Litros recargados', 'rgba(20, 184, 166, 0.7)', tipoGrafica
+                    ),
+                  }}
+                  options={tipoGrafica === 'ambas' ? chartOptionsConLeyenda : chartOptions}
+                />
+              </div>
+            )}
+
             {/* Costo por vehículo */}
             {totalCosto > 0 && !vehiculoFiltro && (
               <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 space-y-3">
@@ -557,23 +626,36 @@ export default function IndicadoresView() {
                   <tr className="bg-gray-50 text-gray-500 text-xs uppercase">
                     <th className="px-4 py-2 text-left">Vehículo</th>
                     <th className="px-4 py-2 text-right">KM</th>
-                    <th className="px-4 py-2 text-right">Litros</th>
+                    <th className="px-4 py-2 text-right">L. recargados</th>
+                    <th className="px-4 py-2 text-right">L. consumidos</th>
                     <th className="px-4 py-2 text-right">Rend.</th>
                     <th className="px-4 py-2 text-right">Costo</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {vehiculosOrdenados.map(([vehiculo, km]) => {
-                    const litros = datosFiltrados
+                    const litrosCargados = datosFiltrados
                       .filter((r) => r.vehiculo_codigo === vehiculo)
                       .reduce((acc, r) => acc + (r.litros_cargados ?? 0), 0)
+                    const litrosConsumidosVehiculo = datosFiltrados
+                      .filter((r) => r.vehiculo_codigo === vehiculo && r.vehiculos?.capacidad_tanque_litros)
+                      .reduce((acc, r) => {
+                        const l = calcLitrosConsumidos(
+                          r.vehiculos!.capacidad_tanque_litros,
+                          r.combustible_salida,
+                          r.combustible_regreso,
+                          r.litros_cargados ?? 0
+                        )
+                        return l > 0 ? acc + l : acc
+                      }, 0)
                     const costo = costoPorVehiculo[vehiculo] ?? 0
-                    const rend = calcRendimiento(km, litros)
+                    const rend = calcRendimiento(km, litrosConsumidosVehiculo)
                     return (
                       <tr key={vehiculo} className="hover:bg-gray-50">
                         <td className="px-4 py-3 font-medium">{vehiculo}</td>
                         <td className="px-4 py-3 text-right">{km.toLocaleString()}</td>
-                        <td className="px-4 py-3 text-right">{litros ? formatDecimal(litros) : '—'}</td>
+                        <td className="px-4 py-3 text-right">{litrosCargados ? formatDecimal(litrosCargados) : '—'}</td>
+                        <td className="px-4 py-3 text-right">{litrosConsumidosVehiculo > 0 ? formatDecimal(litrosConsumidosVehiculo) : '—'}</td>
                         <td className="px-4 py-3 text-right">
                           {rend ? `${formatDecimal(rend)} km/L` : '—'}
                         </td>
@@ -586,7 +668,7 @@ export default function IndicadoresView() {
             </div>
 
             <p className="text-xs text-gray-400 text-center pb-6">
-              Solo recorridos cerrados · Rendimiento solo cuando se registran litros
+              Solo recorridos cerrados · L. consumidos = balance real del tanque · L. recargados = carga en gasolinera
             </p>
           </>
         )}

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { startOfWeek, startOfMonth, endOfMonth, subMonths } from 'date-fns'
 import { supabase } from '@/lib/supabase'
-import { calcKmRecorridos, calcImporte, calcRendimiento } from '@/lib/calculations'
+import { calcKmRecorridos, calcImporte, calcLitrosConsumidos, calcRendimiento } from '@/lib/calculations'
 import { formatFecha, formatMoneda, formatDecimal } from '@/utils/formatters'
 import { combustibleLabel } from '@/lib/constants'
 import Loading from '@/components/common/Loading'
@@ -18,11 +18,13 @@ interface RecorridoHistorico {
   fecha_regreso: string | null
   km_salida: number
   km_regreso: number | null
+  combustible_salida: number
+  combustible_regreso: number | null
   litros_cargados: number | null
   precio_litro: number | null
-  combustible_salida: number
   conductores: { nombre: string } | null
   centros_costo: { nombre: string } | null
+  vehiculos: { capacidad_tanque_litros: number } | null
 }
 
 type Periodo = 'todo' | 'semana' | 'mes' | 'mes_anterior'
@@ -58,9 +60,11 @@ export default function HistoricoView() {
       let query = (supabase.from('recorridos') as any)
         .select(`
           id, vehiculo_codigo, estado, fecha_salida, fecha_regreso,
-          km_salida, km_regreso, litros_cargados, precio_litro, combustible_salida,
+          km_salida, km_regreso, combustible_salida, combustible_regreso,
+          litros_cargados, precio_litro,
           conductores(nombre),
-          centros_costo(nombre)
+          centros_costo(nombre),
+          vehiculos(capacidad_tanque_litros)
         `)
         .order('fecha_salida', { ascending: false })
         .limit(50)
@@ -189,7 +193,8 @@ export default function HistoricoView() {
                   <th className="px-3 py-3 text-right whitespace-nowrap">KM sal.</th>
                   <th className="px-3 py-3 text-right whitespace-nowrap">KM reg.</th>
                   <th className="px-3 py-3 text-right whitespace-nowrap">KM rec.</th>
-                  <th className="px-3 py-3 text-right whitespace-nowrap">Litros</th>
+                  <th className="px-3 py-3 text-right whitespace-nowrap">L. recargados</th>
+                  <th className="px-3 py-3 text-right whitespace-nowrap">L. consumidos</th>
                   <th className="px-3 py-3 text-right whitespace-nowrap">Costo</th>
                   <th className="px-3 py-3 text-right whitespace-nowrap">Rend.</th>
                   <th className="px-3 py-3 text-center whitespace-nowrap">Estado</th>
@@ -202,9 +207,20 @@ export default function HistoricoView() {
                     r.litros_cargados && r.precio_litro
                       ? calcImporte(r.litros_cargados, r.precio_litro)
                       : null
+                  const litrosConsumidos =
+                    kmRec != null &&
+                    r.combustible_regreso != null &&
+                    r.vehiculos?.capacidad_tanque_litros
+                      ? calcLitrosConsumidos(
+                          r.vehiculos.capacidad_tanque_litros,
+                          r.combustible_salida,
+                          r.combustible_regreso,
+                          r.litros_cargados ?? 0
+                        )
+                      : null
                   const rend =
-                    kmRec != null && r.litros_cargados
-                      ? calcRendimiento(kmRec, r.litros_cargados)
+                    kmRec != null && litrosConsumidos != null && litrosConsumidos > 0
+                      ? calcRendimiento(kmRec, litrosConsumidos)
                       : null
 
                   return (
@@ -230,6 +246,9 @@ export default function HistoricoView() {
                       </td>
                       <td className="px-3 py-3 text-right whitespace-nowrap">
                         {r.litros_cargados ? formatDecimal(r.litros_cargados) : '—'}
+                      </td>
+                      <td className="px-3 py-3 text-right whitespace-nowrap">
+                        {litrosConsumidos != null && litrosConsumidos > 0 ? formatDecimal(litrosConsumidos) : '—'}
                       </td>
                       <td className="px-3 py-3 text-right whitespace-nowrap">
                         {costo != null ? formatMoneda(costo) : '—'}
