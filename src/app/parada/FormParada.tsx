@@ -246,10 +246,10 @@ export default function FormParada() {
             label="Litros cargados"
             type="number"
             min={0}
-            step="0.01"
+            step="0.001"
             value={litros}
             onChange={(e) => setLitros(e.target.value)}
-            placeholder="Ej: 35.5"
+            placeholder="Ej: 35.500"
             inputMode="decimal"
             error={errores.litros}
           />
@@ -257,17 +257,17 @@ export default function FormParada() {
             label="Precio por litro ($)"
             type="number"
             min={0}
-            step="0.01"
+            step="0.001"
             value={precio}
             onChange={(e) => setPrecio(e.target.value)}
-            placeholder="Ej: 23.50"
+            placeholder="Ej: 23.500"
             inputMode="decimal"
             error={errores.precio}
           />
           {litros && precio && (
             <p className="text-sm text-blue-700 bg-blue-50 rounded-xl px-3 py-2">
               Importe estimado:{' '}
-              <strong>${(Number(litros) * Number(precio)).toFixed(2)}</strong>
+              <strong>${(Number(litros) * Number(precio)).toFixed(3)}</strong>
             </p>
           )}
         </div>

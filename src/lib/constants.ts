@@ -1,7 +1,7 @@
 // Combustible: SMALLINT 0-8 en BD
-// 0=Vacío, 2=1/4, 4=1/2, 6=3/4, 8=Lleno
+// 0=Reserva (~10%), 2=1/4, 4=1/2, 6=3/4, 8=Lleno
 export const COMBUSTIBLE_NIVELES = [
-  { value: 0, label: 'Vacío' },
+  { value: 0, label: 'Reserva' },
   { value: 2, label: '1/4' },
   { value: 4, label: '1/2' },
   { value: 6, label: '3/4' },

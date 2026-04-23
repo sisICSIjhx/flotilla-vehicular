@@ -12,6 +12,6 @@ export function formatMoneda(value: number): string {
   }).format(value)
 }
 
-export function formatDecimal(value: number, decimals = 2): string {
+export function formatDecimal(value: number, decimals = 3): string {
   return value.toFixed(decimals)
 }

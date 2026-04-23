@@ -11,10 +11,23 @@ import { getPublicUrl } from '@/utils/storage'
 import Loading from '@/components/common/Loading'
 import ErrorMessage from '@/components/common/ErrorMessage'
 
+interface Parada {
+  id: string
+  orden: number
+  estado: string
+  km_parada: number | null
+  combustible_parada: number | null
+  litros_cargados: number | null
+  precio_litro: number | null
+  foto_parada_path: string | null
+  centros_costo: { nombre: string } | null
+}
+
 interface RecorridoHistorico {
   id: string
   vehiculo_codigo: string
   estado: string
+  usa_paradas: boolean
   fecha_salida: string
   fecha_regreso: string | null
   km_salida: number
@@ -28,6 +41,7 @@ interface RecorridoHistorico {
   conductores: { nombre: string } | null
   centros_costo: { nombre: string } | null
   vehiculos: { capacidad_tanque_litros: number } | null
+  recorridos_paradas: Parada[]
 }
 
 type Periodo = 'todo' | 'semana' | 'mes' | 'mes_anterior'
@@ -49,6 +63,7 @@ export default function HistoricoView() {
   const [filtroVehiculo, setFiltroVehiculo] = useState('')
   const [filtroPeriodo, setFiltroPeriodo] = useState<Periodo>('todo')
   const [fotoModal, setFotoModal] = useState<{ url: string; titulo: string } | null>(null)
+  const [paradasModal, setParadasModal] = useState<RecorridoHistorico | null>(null)
 
   useEffect(() => {
     cargar()
@@ -63,12 +78,13 @@ export default function HistoricoView() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let query = (supabase.from('recorridos') as any)
         .select(`
-          id, vehiculo_codigo, estado, fecha_salida, fecha_regreso,
+          id, vehiculo_codigo, estado, usa_paradas, fecha_salida, fecha_regreso,
           km_salida, km_regreso, combustible_salida, combustible_regreso,
           litros_cargados, precio_litro, foto_salida_path, foto_regreso_path,
           conductores(nombre),
           centros_costo(nombre),
-          vehiculos(capacidad_tanque_litros)
+          vehiculos(capacidad_tanque_litros),
+          recorridos_paradas(id, orden, estado, km_parada, combustible_parada, litros_cargados, precio_litro, foto_parada_path, centros_costo(nombre))
         `)
         .order('fecha_salida', { ascending: false })
         .limit(50)
@@ -149,6 +165,147 @@ export default function HistoricoView() {
                 alt={fotoModal.titulo}
                 className="w-full object-contain max-h-[75vh]"
               />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de paradas */}
+      {paradasModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          onClick={() => setParadasModal(null)}
+        >
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+          <div
+            className="relative z-10 w-full max-w-lg max-h-[85vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+              {/* Header */}
+              <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
+                <div>
+                  <p className="text-sm font-bold text-gray-800">
+                    {paradasModal.vehiculo_codigo} — Paradas del recorrido
+                  </p>
+                  <p className="text-xs text-gray-400 mt-0.5">{formatFecha(paradasModal.fecha_salida)}</p>
+                </div>
+                <button
+                  onClick={() => setParadasModal(null)}
+                  className="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors text-lg font-bold"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Lista de paradas */}
+              <div className="overflow-y-auto divide-y divide-gray-100">
+                {[...paradasModal.recorridos_paradas]
+                  .sort((a, b) => a.orden - b.orden)
+                  .map((p) => (
+                    <div key={p.id} className="px-4 py-4 space-y-2">
+                      {/* Encabezado parada */}
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center">
+                            {p.orden}
+                          </span>
+                          <span className="text-sm font-semibold text-gray-800">
+                            {p.centros_costo?.nombre ?? 'Centro de costo no registrado'}
+                          </span>
+                        </div>
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                          p.estado === 'completada'
+                            ? 'bg-green-100 text-green-700'
+                            : 'bg-yellow-100 text-yellow-700'
+                        }`}>
+                          {p.estado === 'completada' ? 'Completada' : 'Pendiente'}
+                        </span>
+                      </div>
+
+                      {/* Datos de la parada */}
+                      {p.estado === 'completada' && (
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs pl-8">
+                          {p.km_parada != null && (
+                            <div>
+                              <span className="text-gray-400">KM parada</span>
+                              <span className="ml-1 font-medium text-gray-700">{p.km_parada.toLocaleString()}</span>
+                            </div>
+                          )}
+                          {p.combustible_parada != null && (
+                            <div>
+                              <span className="text-gray-400">Combustible</span>
+                              <span className="ml-1 font-medium text-gray-700">{combustibleLabel(p.combustible_parada)}</span>
+                            </div>
+                          )}
+                          {p.litros_cargados != null && p.litros_cargados > 0 && (
+                            <div>
+                              <span className="text-gray-400">Litros cargados</span>
+                              <span className="ml-1 font-medium text-gray-700">{formatDecimal(p.litros_cargados)} L</span>
+                            </div>
+                          )}
+                          {p.litros_cargados && p.precio_litro ? (
+                            <div>
+                              <span className="text-gray-400">Costo recarga</span>
+                              <span className="ml-1 font-medium text-gray-700">{formatMoneda(calcImporte(p.litros_cargados, p.precio_litro))}</span>
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
+
+                      {/* Foto de la parada */}
+                      {p.foto_parada_path && (
+                        <div className="pl-8">
+                          <button
+                            onClick={() => {
+                              setParadasModal(null)
+                              setFotoModal({
+                                url: getPublicUrl(p.foto_parada_path!),
+                                titulo: `Foto parada ${p.orden} — ${paradasModal.vehiculo_codigo}`,
+                              })
+                            }}
+                            className="inline-flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-700 font-medium"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                            </svg>
+                            Ver foto de parada
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+              </div>
+
+              {/* Footer con totales de paradas */}
+              {paradasModal.recorridos_paradas.length > 0 && (
+                <div className="px-4 py-3 border-t border-gray-100 bg-gray-50 shrink-0">
+                  <div className="flex gap-4 text-xs text-gray-500">
+                    <span>
+                      <span className="font-semibold text-gray-700">
+                        {paradasModal.recorridos_paradas.filter(p => p.estado === 'completada').length}
+                      </span>
+                      /{paradasModal.recorridos_paradas.length} completadas
+                    </span>
+                    {(() => {
+                      const totalLitros = paradasModal.recorridos_paradas.reduce(
+                        (acc, p) => acc + (p.litros_cargados ?? 0), 0
+                      )
+                      const totalCostoParadas = paradasModal.recorridos_paradas.reduce(
+                        (acc, p) => acc + (p.litros_cargados && p.precio_litro ? calcImporte(p.litros_cargados, p.precio_litro) : 0), 0
+                      )
+                      return totalLitros > 0 ? (
+                        <>
+                          <span>Total recargado: <span className="font-semibold text-gray-700">{formatDecimal(totalLitros)} L</span></span>
+                          {totalCostoParadas > 0 && (
+                            <span>Costo: <span className="font-semibold text-gray-700">{formatMoneda(totalCostoParadas)}</span></span>
+                          )}
+                        </>
+                      ) : null
+                    })()}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -236,6 +393,7 @@ export default function HistoricoView() {
                   <th className="px-3 py-3 text-right whitespace-nowrap">L. consumidos</th>
                   <th className="px-3 py-3 text-right whitespace-nowrap">Costo</th>
                   <th className="px-3 py-3 text-right whitespace-nowrap">Rend.</th>
+                  <th className="px-3 py-3 text-center whitespace-nowrap">Paradas</th>
                   <th className="px-3 py-3 text-center whitespace-nowrap">Foto sal.</th>
                   <th className="px-3 py-3 text-center whitespace-nowrap">Foto reg.</th>
                   <th className="px-3 py-3 text-center whitespace-nowrap">Estado</th>
@@ -296,6 +454,23 @@ export default function HistoricoView() {
                       </td>
                       <td className="px-3 py-3 text-right whitespace-nowrap">
                         {rend != null ? `${formatDecimal(rend)} km/L` : '—'}
+                      </td>
+                      <td className="px-3 py-3 text-center whitespace-nowrap">
+                        {r.usa_paradas && r.recorridos_paradas.length > 0 ? (
+                          <button
+                            onClick={() => setParadasModal(r)}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-purple-50 hover:bg-purple-100 text-purple-700 text-xs font-semibold transition-colors"
+                            title="Ver paradas"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                            </svg>
+                            {r.recorridos_paradas.length}
+                          </button>
+                        ) : (
+                          <span className="text-gray-300 text-xs">—</span>
+                        )}
                       </td>
                       <td className="px-3 py-3 text-center whitespace-nowrap">
                         {r.foto_salida_path ? (
