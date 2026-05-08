@@ -4,11 +4,10 @@ import { useEffect, useState } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { supabase, type RecorridoParada, type CentroCosto } from '@/lib/supabase'
 import { comprimirFoto } from '@/lib/imageCompression'
-import { COMBUSTIBLE_NIVELES } from '@/lib/constants'
+import FuelGauge from '@/components/forms/FuelGauge'
 import { buildFotoParadaPath, subirFoto } from '@/utils/storage'
 import Button from '@/components/common/Button'
 import Input from '@/components/common/Input'
-import Select from '@/components/common/Select'
 import PhotoCapture from '@/components/forms/PhotoCapture'
 import ErrorMessage from '@/components/common/ErrorMessage'
 import Loading from '@/components/common/Loading'
@@ -38,7 +37,7 @@ export default function FormParada() {
 
   // Campos
   const [kmParada, setKmParada] = useState('')
-  const [combustible, setCombustible] = useState('')
+  const [combustible, setCombustible] = useState<number | null>(null)
   const [foto, setFoto] = useState<File | null>(null)
   const [litros, setLitros] = useState('')
   const [precio, setPrecio] = useState('')
@@ -114,7 +113,7 @@ export default function FormParada() {
     } else if (km < kmReferencia) {
       errs.km_parada = `Debe ser mayor o igual a ${kmReferencia.toLocaleString()} KM`
     }
-    if (!combustible) errs.combustible = 'Selecciona el nivel de combustible'
+    if (combustible === null) errs.combustible = 'Selecciona el nivel de combustible'
     if (!foto) errs.foto = 'La foto del tablero es obligatoria'
     if (litros && Number(litros) < 0) errs.litros = 'Ingresa un valor válido'
     if (precio && Number(precio) < 0) errs.precio = 'Ingresa un valor válido'
@@ -141,7 +140,7 @@ export default function FormParada() {
       const { error } = await (supabase.from('recorridos_paradas') as any)
         .update({
           km_parada: Number(kmParada),
-          combustible_parada: Number(combustible),
+          combustible_parada: combustible as number,
           foto_parada_path: fotoPath,
           litros_cargados: litros ? Number(litros) : null,
           precio_litro: precio ? Number(precio) : null,
@@ -224,12 +223,10 @@ export default function FormParada() {
           </p>
         )}
 
-        <Select
+        <FuelGauge
           label="Nivel de combustible"
           value={combustible}
-          onChange={(e) => setCombustible(e.target.value)}
-          options={COMBUSTIBLE_NIVELES.map((n) => ({ value: n.value, label: n.label }))}
-          placeholder="Selecciona el nivel"
+          onChange={setCombustible}
           error={errores.combustible}
         />
 

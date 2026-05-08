@@ -4,12 +4,12 @@ import { useEffect, useState } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { supabase, type Recorrido, type RecorridoParadaConDetalle } from '@/lib/supabase'
 import { comprimirFoto } from '@/lib/imageCompression'
-import { COMBUSTIBLE_NIVELES, combustibleLabel } from '@/lib/constants'
+import { combustibleLabel } from '@/lib/constants'
+import FuelGauge from '@/components/forms/FuelGauge'
 import { buildFotoPath, subirFoto } from '@/utils/storage'
 import { formatFecha } from '@/utils/formatters'
 import Button from '@/components/common/Button'
 import Input from '@/components/common/Input'
-import Select from '@/components/common/Select'
 import PhotoCapture from '@/components/forms/PhotoCapture'
 import ErrorMessage from '@/components/common/ErrorMessage'
 import Loading from '@/components/common/Loading'
@@ -35,7 +35,7 @@ export default function FormRegreso() {
 
   // Campos
   const [kmRegreso, setKmRegreso] = useState('')
-  const [combustible, setCombustible] = useState('')
+  const [combustible, setCombustible] = useState<number | null>(null)
   const [foto, setFoto] = useState<File | null>(null)
   const [litros, setLitros] = useState('')
   const [precio, setPrecio] = useState('')
@@ -105,7 +105,7 @@ export default function FormRegreso() {
     } else if (km < kmMinRegreso) {
       errs.km_regreso = `Debe ser mayor o igual a ${kmMinRegreso.toLocaleString()} KM`
     }
-    if (!combustible) errs.combustible = 'Selecciona el nivel de combustible'
+    if (combustible === null) errs.combustible = 'Selecciona el nivel de combustible'
     if (!foto) errs.foto = 'La foto del tablero es obligatoria'
     if (litros && Number(litros) < 0) errs.litros = 'Ingresa un valor válido'
     if (precio && Number(precio) < 0) errs.precio = 'Ingresa un valor válido'
@@ -132,7 +132,7 @@ export default function FormRegreso() {
       const { error } = await (supabase.from('recorridos') as any)
         .update({
           km_regreso: Number(kmRegreso),
-          combustible_regreso: Number(combustible),
+          combustible_regreso: combustible as number,
           foto_regreso_path: fotoPath,
           litros_cargados: litros ? Number(litros) : null,
           precio_litro: precio ? Number(precio) : null,
@@ -239,12 +239,10 @@ export default function FormRegreso() {
           </p>
         )}
 
-        <Select
+        <FuelGauge
           label="Nivel de combustible"
           value={combustible}
-          onChange={(e) => setCombustible(e.target.value)}
-          options={COMBUSTIBLE_NIVELES.map((n) => ({ value: n.value, label: n.label }))}
-          placeholder="Selecciona el nivel"
+          onChange={setCombustible}
           error={errores.combustible}
         />
 

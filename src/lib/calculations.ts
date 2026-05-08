@@ -8,7 +8,7 @@ export function calcImporte(litros: number, precioLitro: number): number {
 
 /**
  * Convierte el valor entero del nivel de combustible (0-8) a fracción (0.0-1.0).
- * El valor 0 representa la reserva, que equivale al 10% del tanque.
+ * 0=Reserva (~10%), 1=1/8, 2=1/4 … 8=Lleno
  */
 function nivelACombustibleFraccion(nivel: number): number {
   if (nivel === 0) return 0.1

@@ -40,11 +40,18 @@ interface RecorridoHistorico {
   foto_regreso_path: string | null
   conductores: { nombre: string } | null
   centros_costo: { nombre: string } | null
-  vehiculos: { capacidad_tanque_litros: number } | null
+  vehiculos: { capacidad_tanque_litros: number; apodo: string | null } | null
   recorridos_paradas: Parada[]
 }
 
 type Periodo = 'todo' | 'semana' | 'mes' | 'mes_anterior'
+type FiltroEstado = 'todo' | 'abierto' | 'cerrado'
+
+const ESTADOS_FILTRO: { value: FiltroEstado; label: string }[] = [
+  { value: 'todo', label: 'Todos' },
+  { value: 'abierto', label: 'En ruta' },
+  { value: 'cerrado', label: 'Cerrados' },
+]
 
 const PERIODOS = [
   { value: 'todo', label: 'Todo' },
@@ -53,28 +60,57 @@ const PERIODOS = [
   { value: 'mes_anterior', label: 'Mes anterior' },
 ]
 
+const POR_PAGINA = 50
+
 export default function HistoricoView() {
   const router = useRouter()
   const [registros, setRegistros] = useState<RecorridoHistorico[]>([])
-  const [vehiculos, setVehiculos] = useState<string[]>([])
+  const [vehiculos, setVehiculos] = useState<{ codigo: string; apodo: string | null }[]>([])
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [pagina, setPagina] = useState(1)
+  const [total, setTotal] = useState(0)
 
   const [filtroVehiculo, setFiltroVehiculo] = useState('')
   const [filtroPeriodo, setFiltroPeriodo] = useState<Periodo>('todo')
+  const [filtroEstado, setFiltroEstado] = useState<FiltroEstado>('todo')
   const [fotoModal, setFotoModal] = useState<{ url: string; titulo: string } | null>(null)
   const [paradasModal, setParadasModal] = useState<RecorridoHistorico | null>(null)
 
+  // Cargar lista de vehículos para el dropdown (una sola vez)
   useEffect(() => {
-    cargar()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtroVehiculo, filtroPeriodo])
+    async function cargarVehiculos() {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data } = await (supabase.from('vehiculos') as any)
+        .select('codigo, apodo')
+        .eq('estado', 'activo')
+        .order('codigo')
+      if (data) setVehiculos(data as { codigo: string; apodo: string | null }[])
+    }
+    cargarVehiculos()
+  }, [])
 
-  async function cargar() {
+  // Resetear a página 1 y recargar cuando cambien los filtros
+  useEffect(() => {
+    setPagina(1)
+    cargar(1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtroVehiculo, filtroPeriodo, filtroEstado])
+
+  // Recargar solo cuando cambie la página (sin cambio de filtros)
+  useEffect(() => {
+    cargar(pagina)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pagina])
+
+  async function cargar(p: number) {
     setCargando(true)
     setError(null)
 
     try {
+      const desde = (p - 1) * POR_PAGINA
+      const hasta = desde + POR_PAGINA - 1
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let query = (supabase.from('recorridos') as any)
         .select(`
@@ -83,15 +119,14 @@ export default function HistoricoView() {
           litros_cargados, precio_litro, foto_salida_path, foto_regreso_path,
           conductores(nombre),
           centros_costo(nombre),
-          vehiculos(capacidad_tanque_litros),
+          vehiculos(capacidad_tanque_litros, apodo),
           recorridos_paradas(id, orden, estado, km_parada, combustible_parada, litros_cargados, precio_litro, foto_parada_path, centros_costo(nombre))
-        `)
+        `, { count: 'exact' })
         .order('fecha_salida', { ascending: false })
-        .limit(50)
+        .range(desde, hasta)
 
-      if (filtroVehiculo) {
-        query = query.eq('vehiculo_codigo', filtroVehiculo)
-      }
+      if (filtroVehiculo) query = query.eq('vehiculo_codigo', filtroVehiculo)
+      if (filtroEstado !== 'todo') query = query.eq('estado', filtroEstado)
 
       const now = new Date()
       if (filtroPeriodo === 'semana') {
@@ -105,15 +140,11 @@ export default function HistoricoView() {
           .lte('fecha_salida', endOfMonth(prev).toISOString())
       }
 
-      const { data, error: qError } = await query
+      const { data, error: qError, count } = await query
       if (qError) throw new Error(qError.message)
 
-      const rows = (data ?? []) as RecorridoHistorico[]
-      setRegistros(rows)
-
-      // Extraer vehículos únicos para el filtro
-      const unicos = [...new Set(rows.map((r) => r.vehiculo_codigo))].sort()
-      setVehiculos(unicos)
+      setRegistros((data ?? []) as RecorridoHistorico[])
+      setTotal(count ?? 0)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error al cargar histórico')
     } finally {
@@ -134,7 +165,7 @@ export default function HistoricoView() {
   )
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col bg-gray-50">
 
       {/* Modal de foto */}
       {fotoModal && (
@@ -318,9 +349,9 @@ export default function HistoricoView() {
         <h1 className="text-xl font-bold">Histórico de recorridos</h1>
       </header>
 
-      <div className="px-4 py-4 max-w-5xl mx-auto w-full space-y-4">
+      <div className="px-4 py-4 w-full max-w-screen-2xl mx-auto space-y-4">
         {/* Filtros */}
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap gap-3 items-center">
           <select
             value={filtroVehiculo}
             onChange={(e) => setFiltroVehiculo(e.target.value)}
@@ -328,7 +359,9 @@ export default function HistoricoView() {
           >
             <option value="">Todos los vehículos</option>
             {vehiculos.map((v) => (
-              <option key={v} value={v}>{v}</option>
+              <option key={v.codigo} value={v.codigo}>
+                {v.codigo}{v.apodo ? ` — ${v.apodo}` : ''}
+              </option>
             ))}
           </select>
 
@@ -344,6 +377,26 @@ export default function HistoricoView() {
                 }`}
               >
                 {p.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex gap-1 flex-wrap">
+            {ESTADOS_FILTRO.map((e) => (
+              <button
+                key={e.value}
+                onClick={() => setFiltroEstado(e.value)}
+                className={`px-3 py-2 rounded-xl text-sm font-medium transition-colors ${
+                  filtroEstado === e.value
+                    ? e.value === 'abierto'
+                      ? 'bg-orange-500 text-white'
+                      : e.value === 'cerrado'
+                      ? 'bg-green-600 text-white'
+                      : 'bg-blue-600 text-white'
+                    : 'bg-white border border-gray-300 text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                {e.label}
               </button>
             ))}
           </div>
@@ -383,7 +436,9 @@ export default function HistoricoView() {
               <thead>
                 <tr className="bg-gray-50 text-gray-600 text-xs uppercase tracking-wide">
                   <th className="px-3 py-3 text-left whitespace-nowrap">Vehículo</th>
+                  <th className="px-3 py-3 text-left whitespace-nowrap">Apodo</th>
                   <th className="px-3 py-3 text-left whitespace-nowrap">Conductor</th>
+                  <th className="px-3 py-3 text-left whitespace-nowrap">Destino</th>
                   <th className="px-3 py-3 text-left whitespace-nowrap">Salida</th>
                   <th className="px-3 py-3 text-left whitespace-nowrap">Regreso</th>
                   <th className="px-3 py-3 text-right whitespace-nowrap">KM sal.</th>
@@ -425,8 +480,14 @@ export default function HistoricoView() {
                   return (
                     <tr key={r.id} className="hover:bg-gray-50">
                       <td className="px-3 py-3 font-medium whitespace-nowrap">{r.vehiculo_codigo}</td>
+                      <td className="px-3 py-3 whitespace-nowrap text-gray-500">
+                        {r.vehiculos?.apodo ?? '—'}
+                      </td>
                       <td className="px-3 py-3 whitespace-nowrap text-gray-600">
                         {r.conductores?.nombre ?? '—'}
+                      </td>
+                      <td className="px-3 py-3 whitespace-nowrap text-gray-600">
+                        {r.centros_costo?.nombre ?? '—'}
                       </td>
                       <td className="px-3 py-3 whitespace-nowrap text-gray-600">
                         {formatFecha(r.fecha_salida)}
@@ -527,7 +588,54 @@ export default function HistoricoView() {
           </div>
         )}
 
-        <p className="text-xs text-gray-400 text-center pb-6">Mostrando máximo 50 registros</p>
+        {/* Paginación */}
+        {total > 0 && (() => {
+          const totalPaginas = Math.ceil(total / POR_PAGINA)
+          const desde = (pagina - 1) * POR_PAGINA + 1
+          const hasta = Math.min(pagina * POR_PAGINA, total)
+          return (
+            <div className="flex items-center justify-between pb-6">
+              <p className="text-xs text-gray-400">
+                Mostrando {desde}–{hasta} de {total} registros
+              </p>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setPagina(1)}
+                  disabled={pagina === 1 || cargando}
+                  className="px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  title="Primera página"
+                >
+                  «
+                </button>
+                <button
+                  onClick={() => setPagina((p) => p - 1)}
+                  disabled={pagina === 1 || cargando}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  ‹ Anterior
+                </button>
+                <span className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white">
+                  {pagina} / {totalPaginas}
+                </span>
+                <button
+                  onClick={() => setPagina((p) => p + 1)}
+                  disabled={pagina === totalPaginas || cargando}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  Siguiente ›
+                </button>
+                <button
+                  onClick={() => setPagina(totalPaginas)}
+                  disabled={pagina === totalPaginas || cargando}
+                  className="px-2 py-1.5 rounded-lg text-xs font-medium border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  title="Última página"
+                >
+                  »
+                </button>
+              </div>
+            </div>
+          )
+        })()}
       </div>
     </div>
   )

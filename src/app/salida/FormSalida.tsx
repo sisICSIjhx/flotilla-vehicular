@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { supabase, type CentroCosto, type Conductor } from '@/lib/supabase'
 import { comprimirFoto } from '@/lib/imageCompression'
-import { COMBUSTIBLE_NIVELES } from '@/lib/constants'
+import FuelGauge from '@/components/forms/FuelGauge'
 import { buildFotoPath, subirFoto } from '@/utils/storage'
 import Button from '@/components/common/Button'
 import Input from '@/components/common/Input'
@@ -62,7 +62,7 @@ export default function FormSalida() {
 
   // ── Otros campos ───────────────────────────────────
   const [kmSalida, setKmSalida] = useState('')
-  const [combustible, setCombustible] = useState('')
+  const [combustible, setCombustible] = useState<number | null>(null)
   const [foto, setFoto] = useState<File | null>(null)
 
   // ── Paradas intermedias ────────────────────────────
@@ -152,7 +152,7 @@ export default function FormSalida() {
       errs.km_salida = `Debe ser mayor o igual al KM actual del vehículo (${kmBase.toLocaleString()})`
     }
 
-    if (!combustible) errs.combustible = 'Selecciona el nivel de combustible'
+    if (combustible === null) errs.combustible = 'Selecciona el nivel de combustible'
     if (!foto) errs.foto = 'La foto del tablero es obligatoria'
 
     if (usaParadas) {
@@ -222,7 +222,7 @@ export default function FormSalida() {
         conductor_id: conductorIdFinal,
         centro_costo_id: centroCostoIdFinal,
         km_salida: Number(kmSalida),
-        combustible_salida: Number(combustible),
+        combustible_salida: combustible as number,
         foto_salida_path: fotoPath,
         usa_paradas: usaParadas,
         estado: 'abierto',
@@ -374,12 +374,10 @@ export default function FormSalida() {
           error={errores.km_salida}
         />
 
-        <Select
+        <FuelGauge
           label="Nivel de combustible"
           value={combustible}
-          onChange={(e) => setCombustible(e.target.value)}
-          options={COMBUSTIBLE_NIVELES.map((n) => ({ value: n.value, label: n.label }))}
-          placeholder="Selecciona el nivel"
+          onChange={setCombustible}
           error={errores.combustible}
         />
 

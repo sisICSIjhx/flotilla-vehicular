@@ -55,7 +55,7 @@ interface RecorridoCerrado {
   combustible_regreso: number
   litros_cargados: number | null
   precio_litro: number | null
-  vehiculos: { capacidad_tanque_litros: number } | null
+  vehiculos: { capacidad_tanque_litros: number; apodo: string | null } | null
 }
 
 interface StatCard {
@@ -120,7 +120,7 @@ const chartOptionsConLeyenda = {
 export default function IndicadoresView() {
   const router = useRouter()
   const [datos, setDatos] = useState<RecorridoCerrado[]>([])
-  const [vehiculos, setVehiculos] = useState<string[]>([])
+  const [vehiculos, setVehiculos] = useState<{ codigo: string; apodo: string | null }[]>([])
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -148,10 +148,10 @@ export default function IndicadoresView() {
   async function cargarVehiculos() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data } = await (supabase.from('vehiculos') as any)
-      .select('codigo')
+      .select('codigo, apodo')
       .eq('estado', 'activo')
       .order('codigo', { ascending: true })
-    if (data) setVehiculos(data.map((v: { codigo: string }) => v.codigo))
+    if (data) setVehiculos(data as { codigo: string; apodo: string | null }[])
   }
 
   function calcularRango(): { desde: string; hasta: string } {
@@ -186,7 +186,7 @@ export default function IndicadoresView() {
       const { desde, hasta } = calcularRango()
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data, error: qError } = await (supabase.from('recorridos') as any)
-        .select('vehiculo_codigo, fecha_salida, km_salida, km_regreso, combustible_salida, combustible_regreso, litros_cargados, precio_litro, vehiculos(capacidad_tanque_litros)')
+        .select('vehiculo_codigo, fecha_salida, km_salida, km_regreso, combustible_salida, combustible_regreso, litros_cargados, precio_litro, vehiculos(capacidad_tanque_litros, apodo)')
         .eq('estado', 'cerrado')
         .gte('fecha_salida', desde)
         .lte('fecha_salida', hasta)
@@ -212,6 +212,13 @@ export default function IndicadoresView() {
   const datosFiltrados = vehiculoFiltro
     ? datos.filter((r) => r.vehiculo_codigo === vehiculoFiltro)
     : datos
+
+  // Mapa codigo → apodo para labels de gráficas y tabla
+  const apodoMap = Object.fromEntries(vehiculos.map((v) => [v.codigo, v.apodo]))
+  const labelVehiculo = (codigo: string) => {
+    const apodo = apodoMap[codigo] ?? datos.find((r) => r.vehiculo_codigo === codigo)?.vehiculos?.apodo
+    return apodo ? `${codigo} — ${apodo}` : codigo
+  }
 
   // ── Cálculos globales ──────────────────────────────────────────────────────
   const totalKm = datosFiltrados.reduce((acc, r) => acc + calcKmRecorridos(r.km_salida, r.km_regreso), 0)
@@ -303,7 +310,7 @@ export default function IndicadoresView() {
   const labelPeriodo = esPorDia ? 'KM por día' : 'KM por mes'
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col bg-gray-50">
       <header className="bg-blue-600 text-white px-4 py-5 shadow">
         <button onClick={() => router.push('/')} className="text-blue-200 text-sm mb-2">
           ← Inicio
@@ -311,7 +318,7 @@ export default function IndicadoresView() {
         <h1 className="text-xl font-bold">Indicadores</h1>
       </header>
 
-      <div className="px-4 py-4 max-w-3xl mx-auto w-full space-y-6">
+      <div className="px-4 py-4 w-full max-w-6xl mx-auto space-y-6">
 
         {/* Selector de período */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 space-y-3">
@@ -450,10 +457,11 @@ export default function IndicadoresView() {
             >
               <option value="">Todos los vehículos</option>
               {vehiculos.map((v) => {
-                const tieneDatos = datos.some((r) => r.vehiculo_codigo === v)
+                const tieneDatos = datos.some((r) => r.vehiculo_codigo === v.codigo)
+                const label = v.apodo ? `${v.codigo} — ${v.apodo}` : v.codigo
                 return (
-                  <option key={v} value={v}>
-                    {v}{!tieneDatos ? ' (sin datos en este período)' : ''}
+                  <option key={v.codigo} value={v.codigo}>
+                    {label}{!tieneDatos ? ' (sin datos en este período)' : ''}
                   </option>
                 )
               })}
@@ -511,7 +519,7 @@ export default function IndicadoresView() {
                 <Chart
                   type={tipoGrafica === 'tendencia' ? 'line' : 'bar'}
                   data={{
-                    labels: vehiculosOrdenados.map(([v]) => v),
+                    labels: vehiculosOrdenados.map(([v]) => labelVehiculo(v)),
                     datasets: buildDatasets(
                       vehiculosOrdenados.map(([, km]) => km),
                       'KM recorridos', 'rgba(37, 99, 235, 0.7)', tipoGrafica
@@ -605,7 +613,7 @@ export default function IndicadoresView() {
                 <Chart
                   type={tipoGrafica === 'tendencia' ? 'line' : 'bar'}
                   data={{
-                    labels: vehiculosCostoOrdenados.map(([v]) => v),
+                    labels: vehiculosCostoOrdenados.map(([v]) => labelVehiculo(v)),
                     datasets: buildDatasets(
                       vehiculosCostoOrdenados.map(([, c]) => c),
                       'Costo ($)', 'rgba(245, 158, 11, 0.7)', tipoGrafica
@@ -621,50 +629,55 @@ export default function IndicadoresView() {
               <div className="px-4 py-3 border-b border-gray-100">
                 <h2 className="text-sm font-semibold text-gray-700">Resumen por vehículo</h2>
               </div>
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="bg-gray-50 text-gray-500 text-xs uppercase">
-                    <th className="px-4 py-2 text-left">Vehículo</th>
-                    <th className="px-4 py-2 text-right">KM</th>
-                    <th className="px-4 py-2 text-right">L. recargados</th>
-                    <th className="px-4 py-2 text-right">L. consumidos</th>
-                    <th className="px-4 py-2 text-right">Rend.</th>
-                    <th className="px-4 py-2 text-right">Costo</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {vehiculosOrdenados.map(([vehiculo, km]) => {
-                    const litrosCargados = datosFiltrados
-                      .filter((r) => r.vehiculo_codigo === vehiculo)
-                      .reduce((acc, r) => acc + (r.litros_cargados ?? 0), 0)
-                    const litrosConsumidosVehiculo = datosFiltrados
-                      .filter((r) => r.vehiculo_codigo === vehiculo && r.vehiculos?.capacidad_tanque_litros)
-                      .reduce((acc, r) => {
-                        const l = calcLitrosConsumidos(
-                          r.vehiculos!.capacidad_tanque_litros,
-                          r.combustible_salida,
-                          r.combustible_regreso,
-                          r.litros_cargados ?? 0
-                        )
-                        return l > 0 ? acc + l : acc
-                      }, 0)
-                    const costo = costoPorVehiculo[vehiculo] ?? 0
-                    const rend = calcRendimiento(km, litrosConsumidosVehiculo)
-                    return (
-                      <tr key={vehiculo} className="hover:bg-gray-50">
-                        <td className="px-4 py-3 font-medium">{vehiculo}</td>
-                        <td className="px-4 py-3 text-right">{km.toLocaleString()}</td>
-                        <td className="px-4 py-3 text-right">{litrosCargados ? formatDecimal(litrosCargados) : '—'}</td>
-                        <td className="px-4 py-3 text-right">{litrosConsumidosVehiculo > 0 ? formatDecimal(litrosConsumidosVehiculo) : '—'}</td>
-                        <td className="px-4 py-3 text-right">
-                          {rend ? `${formatDecimal(rend)} km/L` : '—'}
-                        </td>
-                        <td className="px-4 py-3 text-right">{costo ? formatMoneda(costo) : '—'}</td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-50 text-gray-500 text-xs uppercase">
+                      <th className="px-4 py-2 text-left whitespace-nowrap">Vehículo</th>
+                      <th className="px-4 py-2 text-left whitespace-nowrap">Apodo</th>
+                      <th className="px-4 py-2 text-right whitespace-nowrap">KM</th>
+                      <th className="px-4 py-2 text-right whitespace-nowrap">L. recargados</th>
+                      <th className="px-4 py-2 text-right whitespace-nowrap">L. consumidos</th>
+                      <th className="px-4 py-2 text-right whitespace-nowrap">Rend.</th>
+                      <th className="px-4 py-2 text-right whitespace-nowrap">Costo</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {vehiculosOrdenados.map(([vehiculo, km]) => {
+                      const apodo = apodoMap[vehiculo] ?? datos.find((r) => r.vehiculo_codigo === vehiculo)?.vehiculos?.apodo
+                      const litrosCargados = datosFiltrados
+                        .filter((r) => r.vehiculo_codigo === vehiculo)
+                        .reduce((acc, r) => acc + (r.litros_cargados ?? 0), 0)
+                      const litrosConsumidosVehiculo = datosFiltrados
+                        .filter((r) => r.vehiculo_codigo === vehiculo && r.vehiculos?.capacidad_tanque_litros)
+                        .reduce((acc, r) => {
+                          const l = calcLitrosConsumidos(
+                            r.vehiculos!.capacidad_tanque_litros,
+                            r.combustible_salida,
+                            r.combustible_regreso,
+                            r.litros_cargados ?? 0
+                          )
+                          return l > 0 ? acc + l : acc
+                        }, 0)
+                      const costo = costoPorVehiculo[vehiculo] ?? 0
+                      const rend = calcRendimiento(km, litrosConsumidosVehiculo)
+                      return (
+                        <tr key={vehiculo} className="hover:bg-gray-50">
+                          <td className="px-4 py-3 font-medium whitespace-nowrap">{vehiculo}</td>
+                          <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{apodo ?? '—'}</td>
+                          <td className="px-4 py-3 text-right whitespace-nowrap">{km.toLocaleString()}</td>
+                          <td className="px-4 py-3 text-right whitespace-nowrap">{litrosCargados ? formatDecimal(litrosCargados) : '—'}</td>
+                          <td className="px-4 py-3 text-right whitespace-nowrap">{litrosConsumidosVehiculo > 0 ? formatDecimal(litrosConsumidosVehiculo) : '—'}</td>
+                          <td className="px-4 py-3 text-right whitespace-nowrap">
+                            {rend ? `${formatDecimal(rend)} km/L` : '—'}
+                          </td>
+                          <td className="px-4 py-3 text-right whitespace-nowrap">{costo ? formatMoneda(costo) : '—'}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
 
             <p className="text-xs text-gray-400 text-center pb-6">

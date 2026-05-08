@@ -53,7 +53,7 @@ export default function HomePage() {
             className="w-full rounded-xl border border-gray-300 px-3 py-3 text-base uppercase placeholder:normal-case focus:outline-none focus:ring-2 focus:ring-blue-500"
             autoCapitalize="characters"
           />
-          <Button type="submit" variant="secondary" disabled={!codigoManual.trim()}>
+          <Button type="submit" disabled={!codigoManual.trim()}>
             Buscar vehículo
           </Button>
         </form>
