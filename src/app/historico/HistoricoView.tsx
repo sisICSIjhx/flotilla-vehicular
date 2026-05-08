@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { startOfWeek, startOfMonth, endOfMonth, subMonths } from 'date-fns'
+import { startOfWeek, startOfMonth, endOfMonth, subMonths, format } from 'date-fns'
 import { supabase } from '@/lib/supabase'
 import { calcKmRecorridos, calcImporte, calcLitrosConsumidos, calcRendimiento } from '@/lib/calculations'
 import { formatFecha, formatMoneda, formatDecimal } from '@/utils/formatters'
@@ -44,7 +44,26 @@ interface RecorridoHistorico {
   recorridos_paradas: Parada[]
 }
 
+interface CargaGasolina {
+  recorrido_id: string
+  parada_id: string | null
+  tipo_carga: 'regreso_final' | 'parada_intermedia'
+  vehiculo_codigo: string
+  placa: string | null
+  modelo: string | null
+  conductor: string
+  fecha_carga: string
+  km_carga: number
+  litros_cargados: number
+  precio_litro: number
+  costo_total: number
+  fecha_siguiente_carga: string | null
+  km_siguiente_carga: number | null
+}
+
 type Periodo = 'todo' | 'semana' | 'mes' | 'mes_anterior'
+type VistaActiva = 'recorridos' | 'cargas'
+type TipoCarga = 'todas' | 'regreso_final' | 'parada_intermedia'
 
 const PERIODOS = [
   { value: 'todo', label: 'Todo' },
@@ -55,21 +74,48 @@ const PERIODOS = [
 
 export default function HistoricoView() {
   const router = useRouter()
+
+  // ── Vista activa ──────────────────────────────────────────────────────────
+  const [vistaActiva, setVistaActiva] = useState<VistaActiva>('recorridos')
+
+  // ── Estado: Recorridos ────────────────────────────────────────────────────
   const [registros, setRegistros] = useState<RecorridoHistorico[]>([])
   const [vehiculos, setVehiculos] = useState<string[]>([])
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<string | null>(null)
-
   const [filtroVehiculo, setFiltroVehiculo] = useState('')
   const [filtroPeriodo, setFiltroPeriodo] = useState<Periodo>('todo')
   const [fotoModal, setFotoModal] = useState<{ url: string; titulo: string } | null>(null)
   const [paradasModal, setParadasModal] = useState<RecorridoHistorico | null>(null)
 
+  // ── Estado: Cargas de gasolina ────────────────────────────────────────────
+  const hoy = new Date()
+  const defaultFechaInicio = `${hoy.getFullYear()}-05-01`
+  const defaultFechaFin = format(hoy, 'yyyy-MM-dd')
+
+  const [cargas, setCargas] = useState<CargaGasolina[]>([])
+  const [cargandoCargas, setCargandoCargas] = useState(false)
+  const [errorCargas, setErrorCargas] = useState<string | null>(null)
+  const [filtroFechaInicio, setFiltroFechaInicio] = useState(defaultFechaInicio)
+  const [filtroFechaFin, setFiltroFechaFin] = useState(defaultFechaFin)
+  const [filtroVehiculoCargas, setFiltroVehiculoCargas] = useState('')
+  const [filtroConductorCargas, setFiltroConductorCargas] = useState('')
+  const [filtroTipoCarga, setFiltroTipoCarga] = useState<TipoCarga>('todas')
+
+  // ── Efectos ───────────────────────────────────────────────────────────────
   useEffect(() => {
     cargar()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtroVehiculo, filtroPeriodo])
 
+  useEffect(() => {
+    if (vistaActiva === 'cargas') {
+      cargarCargas()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vistaActiva, filtroFechaInicio, filtroFechaFin, filtroVehiculoCargas])
+
+  // ── Carga de recorridos ───────────────────────────────────────────────────
   async function cargar() {
     setCargando(true)
     setError(null)
@@ -111,7 +157,6 @@ export default function HistoricoView() {
       const rows = (data ?? []) as RecorridoHistorico[]
       setRegistros(rows)
 
-      // Extraer vehículos únicos para el filtro
       const unicos = [...new Set(rows.map((r) => r.vehiculo_codigo))].sort()
       setVehiculos(unicos)
     } catch (err) {
@@ -121,7 +166,136 @@ export default function HistoricoView() {
     }
   }
 
-  // Totales de la vista actual (solo cerrados)
+  // ── Carga de cargas de gasolina ───────────────────────────────────────────
+  async function cargarCargas() {
+    setCargandoCargas(true)
+    setErrorCargas(null)
+
+    try {
+      const fechaInicioISO = new Date(filtroFechaInicio + 'T00:00:00').toISOString()
+      const fechaFinISO = new Date(filtroFechaFin + 'T23:59:59').toISOString()
+
+      // Query 1: cargas al cerrar recorrido
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const q1 = (supabase.from('recorridos') as any)
+        .select(`
+          id, vehiculo_codigo, fecha_regreso, km_regreso, litros_cargados, precio_litro,
+          conductores(nombre),
+          vehiculos(placa, modelo)
+        `)
+        .not('litros_cargados', 'is', null)
+        .gt('litros_cargados', 0)
+        .not('precio_litro', 'is', null)
+        .gt('precio_litro', 0)
+        .not('fecha_regreso', 'is', null)
+        .gte('fecha_regreso', fechaInicioISO)
+        .lte('fecha_regreso', fechaFinISO)
+
+      // Query 2: cargas en paradas intermedias
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const q2 = (supabase.from('recorridos_paradas') as any)
+        .select(`
+          id, recorrido_id, fecha_parada, km_parada, litros_cargados, precio_litro,
+          recorridos!inner(vehiculo_codigo, conductores(nombre), vehiculos(placa, modelo))
+        `)
+        .not('litros_cargados', 'is', null)
+        .gt('litros_cargados', 0)
+        .not('precio_litro', 'is', null)
+        .gt('precio_litro', 0)
+        .not('fecha_parada', 'is', null)
+        .gte('fecha_parada', fechaInicioISO)
+        .lte('fecha_parada', fechaFinISO)
+
+      const [{ data: d1, error: e1 }, { data: d2, error: e2 }] = await Promise.all([q1, q2])
+
+      if (e1) throw new Error(e1.message)
+      if (e2) throw new Error(e2.message)
+
+      // Normalizar a estructura común
+      type RawCarga = Omit<CargaGasolina, 'fecha_siguiente_carga' | 'km_siguiente_carga'>
+      const lista: RawCarga[] = []
+
+      for (const r of (d1 ?? [])) {
+        if (!r.km_regreso) continue
+        lista.push({
+          recorrido_id: r.id,
+          parada_id: null,
+          tipo_carga: 'regreso_final',
+          vehiculo_codigo: r.vehiculo_codigo,
+          placa: r.vehiculos?.placa ?? null,
+          modelo: r.vehiculos?.modelo ?? null,
+          conductor: r.conductores?.nombre ?? '—',
+          fecha_carga: r.fecha_regreso,
+          km_carga: r.km_regreso,
+          litros_cargados: Number(r.litros_cargados),
+          precio_litro: Number(r.precio_litro),
+          costo_total: Number(r.litros_cargados) * Number(r.precio_litro),
+        })
+      }
+
+      for (const p of (d2 ?? [])) {
+        if (!p.km_parada || !p.fecha_parada) continue
+        const rec = p.recorridos
+        lista.push({
+          recorrido_id: p.recorrido_id,
+          parada_id: p.id,
+          tipo_carga: 'parada_intermedia',
+          vehiculo_codigo: rec?.vehiculo_codigo ?? '',
+          placa: rec?.vehiculos?.placa ?? null,
+          modelo: rec?.vehiculos?.modelo ?? null,
+          conductor: rec?.conductores?.nombre ?? '—',
+          fecha_carga: p.fecha_parada,
+          km_carga: p.km_parada,
+          litros_cargados: Number(p.litros_cargados),
+          precio_litro: Number(p.precio_litro),
+          costo_total: Number(p.litros_cargados) * Number(p.precio_litro),
+        })
+      }
+
+      // Filtrar por vehículo si aplica
+      const listaFiltrada = filtroVehiculoCargas
+        ? lista.filter((c) => c.vehiculo_codigo === filtroVehiculoCargas)
+        : lista
+
+      // Ordenar por vehículo → fecha → km (para calcular siguiente carga)
+      listaFiltrada.sort((a, b) => {
+        if (a.vehiculo_codigo !== b.vehiculo_codigo) {
+          return a.vehiculo_codigo.localeCompare(b.vehiculo_codigo)
+        }
+        const da = new Date(a.fecha_carga).getTime()
+        const db = new Date(b.fecha_carga).getTime()
+        if (da !== db) return da - db
+        return a.km_carga - b.km_carga
+      })
+
+      // Lógica LEAD: siguiente carga del mismo vehículo
+      const conSiguiente: CargaGasolina[] = listaFiltrada.map((item, idx) => {
+        const next = listaFiltrada[idx + 1]
+        const tieneSiguiente = next && next.vehiculo_codigo === item.vehiculo_codigo
+        return {
+          ...item,
+          fecha_siguiente_carga: tieneSiguiente ? next.fecha_carga : null,
+          km_siguiente_carga: tieneSiguiente ? next.km_carga : null,
+        }
+      })
+
+      // Reordenar para mostrar: más reciente primero
+      conSiguiente.sort((a, b) => {
+        const da = new Date(a.fecha_carga).getTime()
+        const db = new Date(b.fecha_carga).getTime()
+        if (da !== db) return db - da
+        return b.km_carga - a.km_carga
+      })
+
+      setCargas(conSiguiente)
+    } catch (err) {
+      setErrorCargas(err instanceof Error ? err.message : 'Error al cargar cargas de gasolina')
+    } finally {
+      setCargandoCargas(false)
+    }
+  }
+
+  // ── Totales recorridos ────────────────────────────────────────────────────
   const cerrados = registros.filter((r) => r.estado === 'cerrado')
   const totalKm = cerrados.reduce(
     (acc, r) => acc + (r.km_regreso != null ? calcKmRecorridos(r.km_salida, r.km_regreso) : 0),
@@ -133,6 +307,21 @@ export default function HistoricoView() {
     0
   )
 
+  // ── Totales y filtros cargas ──────────────────────────────────────────────
+  const cargasFiltradas = cargas.filter((c) => {
+    if (filtroConductorCargas && c.conductor !== filtroConductorCargas) return false
+    if (filtroTipoCarga !== 'todas' && c.tipo_carga !== filtroTipoCarga) return false
+    return true
+  })
+
+  const vehiculosCargas = [...new Set(cargas.map((c) => c.vehiculo_codigo))].sort()
+  const conductoresCargas = [...new Set(cargas.map((c) => c.conductor))].filter((n) => n !== '—').sort()
+
+  const totalPesosCargas = cargasFiltradas.reduce((acc, c) => acc + c.costo_total, 0)
+  const totalLitrosCargas = cargasFiltradas.reduce((acc, c) => acc + c.litros_cargados, 0)
+  const promedioPrecioLitro = totalLitrosCargas > 0 ? totalPesosCargas / totalLitrosCargas : 0
+
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen flex flex-col">
 
@@ -142,9 +331,7 @@ export default function HistoricoView() {
           className="fixed inset-0 z-50 flex items-center justify-center p-4"
           onClick={() => setFotoModal(null)}
         >
-          {/* Fondo difuminado */}
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
-          {/* Contenedor foto */}
           <div
             className="relative z-10 max-w-2xl w-full"
             onClick={(e) => e.stopPropagation()}
@@ -182,7 +369,6 @@ export default function HistoricoView() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden">
-              {/* Header */}
               <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
                 <div>
                   <p className="text-sm font-bold text-gray-800">
@@ -198,13 +384,11 @@ export default function HistoricoView() {
                 </button>
               </div>
 
-              {/* Lista de paradas */}
               <div className="overflow-y-auto divide-y divide-gray-100">
                 {[...paradasModal.recorridos_paradas]
                   .sort((a, b) => a.orden - b.orden)
                   .map((p) => (
                     <div key={p.id} className="px-4 py-4 space-y-2">
-                      {/* Encabezado parada */}
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <span className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 text-xs font-bold flex items-center justify-center">
@@ -223,7 +407,6 @@ export default function HistoricoView() {
                         </span>
                       </div>
 
-                      {/* Datos de la parada */}
                       {p.estado === 'completada' && (
                         <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs pl-8">
                           {p.km_parada != null && (
@@ -253,7 +436,6 @@ export default function HistoricoView() {
                         </div>
                       )}
 
-                      {/* Foto de la parada */}
                       {p.foto_parada_path && (
                         <div className="pl-8">
                           <button
@@ -277,7 +459,6 @@ export default function HistoricoView() {
                   ))}
               </div>
 
-              {/* Footer con totales de paradas */}
               {paradasModal.recorridos_paradas.length > 0 && (
                 <div className="px-4 py-3 border-t border-gray-100 bg-gray-50 shrink-0">
                   <div className="flex gap-4 text-xs text-gray-500">
@@ -311,6 +492,7 @@ export default function HistoricoView() {
         </div>
       )}
 
+      {/* Header */}
       <header className="bg-blue-600 text-white px-4 py-5 shadow">
         <button onClick={() => router.push('/')} className="text-blue-200 text-sm mb-2">
           ← Inicio
@@ -318,217 +500,422 @@ export default function HistoricoView() {
         <h1 className="text-xl font-bold">Histórico de recorridos</h1>
       </header>
 
-      <div className="px-4 py-4 max-w-5xl mx-auto w-full space-y-4">
-        {/* Filtros */}
-        <div className="flex flex-wrap gap-3">
-          <select
-            value={filtroVehiculo}
-            onChange={(e) => setFiltroVehiculo(e.target.value)}
-            className="rounded-xl border border-gray-300 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+      {/* Tabs */}
+      <div className="bg-white border-b border-gray-200 px-4">
+        <div className="flex max-w-5xl mx-auto">
+          <button
+            onClick={() => setVistaActiva('recorridos')}
+            className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+              vistaActiva === 'recorridos'
+                ? 'border-blue-600 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
           >
-            <option value="">Todos los vehículos</option>
-            {vehiculos.map((v) => (
-              <option key={v} value={v}>{v}</option>
-            ))}
-          </select>
-
-          <div className="flex gap-1 flex-wrap">
-            {PERIODOS.map((p) => (
-              <button
-                key={p.value}
-                onClick={() => setFiltroPeriodo(p.value as Periodo)}
-                className={`px-3 py-2 rounded-xl text-sm font-medium transition-colors ${
-                  filtroPeriodo === p.value
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-white border border-gray-300 text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
+            Recorridos
+          </button>
+          <button
+            onClick={() => setVistaActiva('cargas')}
+            className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+              vistaActiva === 'cargas'
+                ? 'border-blue-600 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Cargas de gasolina
+          </button>
         </div>
-
-        {/* Resumen */}
-        {!cargando && cerrados.length > 0 && (
-          <div className="grid grid-cols-3 gap-3">
-            <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-3 py-3 text-center">
-              <p className="text-xs text-gray-500">Recorridos</p>
-              <p className="text-lg font-bold text-gray-800">{cerrados.length}</p>
-            </div>
-            <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-3 py-3 text-center">
-              <p className="text-xs text-gray-500">KM totales</p>
-              <p className="text-lg font-bold text-gray-800">{totalKm.toLocaleString()}</p>
-            </div>
-            <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-3 py-3 text-center">
-              <p className="text-xs text-gray-500">Costo total</p>
-              <p className="text-lg font-bold text-gray-800">{formatMoneda(totalCosto)}</p>
-            </div>
-          </div>
-        )}
-
-        {error && <ErrorMessage mensaje={error} />}
-
-        {cargando ? (
-          <Loading texto="Cargando registros..." />
-        ) : registros.length === 0 ? (
-          <div className="text-center py-12 text-gray-400">
-            <span className="text-4xl">📋</span>
-            <p className="mt-2 text-sm">No hay registros para este filtro</p>
-          </div>
-        ) : (
-          /* Tabla con scroll horizontal en mobile */
-          <div className="overflow-x-auto rounded-2xl border border-gray-200 shadow-sm">
-            <table className="min-w-full bg-white text-sm">
-              <thead>
-                <tr className="bg-gray-50 text-gray-600 text-xs uppercase tracking-wide">
-                  <th className="px-3 py-3 text-left whitespace-nowrap">Vehículo</th>
-                  <th className="px-3 py-3 text-left whitespace-nowrap">Conductor</th>
-                  <th className="px-3 py-3 text-left whitespace-nowrap">Salida</th>
-                  <th className="px-3 py-3 text-left whitespace-nowrap">Regreso</th>
-                  <th className="px-3 py-3 text-right whitespace-nowrap">KM sal.</th>
-                  <th className="px-3 py-3 text-right whitespace-nowrap">KM reg.</th>
-                  <th className="px-3 py-3 text-right whitespace-nowrap">KM rec.</th>
-                  <th className="px-3 py-3 text-right whitespace-nowrap">L. recargados</th>
-                  <th className="px-3 py-3 text-right whitespace-nowrap">L. consumidos</th>
-                  <th className="px-3 py-3 text-right whitespace-nowrap">Costo</th>
-                  <th className="px-3 py-3 text-right whitespace-nowrap">Rend.</th>
-                  <th className="px-3 py-3 text-center whitespace-nowrap">Paradas</th>
-                  <th className="px-3 py-3 text-center whitespace-nowrap">Foto sal.</th>
-                  <th className="px-3 py-3 text-center whitespace-nowrap">Foto reg.</th>
-                  <th className="px-3 py-3 text-center whitespace-nowrap">Estado</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {registros.map((r) => {
-                  const kmRec = r.km_regreso != null ? calcKmRecorridos(r.km_salida, r.km_regreso) : null
-                  const costo =
-                    r.litros_cargados && r.precio_litro
-                      ? calcImporte(r.litros_cargados, r.precio_litro)
-                      : null
-                  const litrosConsumidos =
-                    kmRec != null &&
-                    r.combustible_regreso != null &&
-                    r.vehiculos?.capacidad_tanque_litros
-                      ? calcLitrosConsumidos(
-                          r.vehiculos.capacidad_tanque_litros,
-                          r.combustible_salida,
-                          r.combustible_regreso,
-                          r.litros_cargados ?? 0
-                        )
-                      : null
-                  const rend =
-                    kmRec != null && litrosConsumidos != null && litrosConsumidos > 0
-                      ? calcRendimiento(kmRec, litrosConsumidos)
-                      : null
-
-                  return (
-                    <tr key={r.id} className="hover:bg-gray-50">
-                      <td className="px-3 py-3 font-medium whitespace-nowrap">{r.vehiculo_codigo}</td>
-                      <td className="px-3 py-3 whitespace-nowrap text-gray-600">
-                        {r.conductores?.nombre ?? '—'}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-gray-600">
-                        {formatFecha(r.fecha_salida)}
-                      </td>
-                      <td className="px-3 py-3 whitespace-nowrap text-gray-600">
-                        {r.fecha_regreso ? formatFecha(r.fecha_regreso) : '—'}
-                      </td>
-                      <td className="px-3 py-3 text-right whitespace-nowrap">
-                        {r.km_salida.toLocaleString()}
-                      </td>
-                      <td className="px-3 py-3 text-right whitespace-nowrap">
-                        {r.km_regreso?.toLocaleString() ?? '—'}
-                      </td>
-                      <td className="px-3 py-3 text-right font-medium whitespace-nowrap">
-                        {kmRec != null ? kmRec.toLocaleString() : '—'}
-                      </td>
-                      <td className="px-3 py-3 text-right whitespace-nowrap">
-                        {r.litros_cargados ? formatDecimal(r.litros_cargados) : '—'}
-                      </td>
-                      <td className="px-3 py-3 text-right whitespace-nowrap">
-                        {litrosConsumidos != null && litrosConsumidos > 0 ? formatDecimal(litrosConsumidos) : '—'}
-                      </td>
-                      <td className="px-3 py-3 text-right whitespace-nowrap">
-                        {costo != null ? formatMoneda(costo) : '—'}
-                      </td>
-                      <td className="px-3 py-3 text-right whitespace-nowrap">
-                        {rend != null ? `${formatDecimal(rend)} km/L` : '—'}
-                      </td>
-                      <td className="px-3 py-3 text-center whitespace-nowrap">
-                        {r.usa_paradas && r.recorridos_paradas.length > 0 ? (
-                          <button
-                            onClick={() => setParadasModal(r)}
-                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-purple-50 hover:bg-purple-100 text-purple-700 text-xs font-semibold transition-colors"
-                            title="Ver paradas"
-                          >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                            </svg>
-                            {r.recorridos_paradas.length}
-                          </button>
-                        ) : (
-                          <span className="text-gray-300 text-xs">—</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-3 text-center whitespace-nowrap">
-                        {r.foto_salida_path ? (
-                          <button
-                            onClick={() => setFotoModal({
-                              url: getPublicUrl(r.foto_salida_path!),
-                              titulo: `Foto salida — ${r.vehiculo_codigo} · ${formatFecha(r.fecha_salida)}`,
-                            })}
-                            className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 transition-colors"
-                            title="Ver foto de salida"
-                          >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                            </svg>
-                          </button>
-                        ) : (
-                          <span className="text-gray-300 text-xs">—</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-3 text-center whitespace-nowrap">
-                        {r.foto_regreso_path ? (
-                          <button
-                            onClick={() => setFotoModal({
-                              url: getPublicUrl(r.foto_regreso_path!),
-                              titulo: `Foto regreso — ${r.vehiculo_codigo} · ${r.fecha_regreso ? formatFecha(r.fecha_regreso) : ''}`,
-                            })}
-                            className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-green-50 hover:bg-green-100 text-green-600 transition-colors"
-                            title="Ver foto de regreso"
-                          >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                            </svg>
-                          </button>
-                        ) : (
-                          <span className="text-gray-300 text-xs">—</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-3 text-center whitespace-nowrap">
-                        <span
-                          className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
-                            r.estado === 'cerrado'
-                              ? 'bg-green-100 text-green-700'
-                              : 'bg-orange-100 text-orange-700'
-                          }`}
-                        >
-                          {r.estado === 'cerrado' ? 'Cerrado' : 'En ruta'}
-                        </span>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        <p className="text-xs text-gray-400 text-center pb-6">Mostrando máximo 50 registros</p>
       </div>
+
+      {/* ─── Vista: Recorridos ─────────────────────────────────────────────── */}
+      {vistaActiva === 'recorridos' && (
+        <div className="px-4 py-4 max-w-5xl mx-auto w-full space-y-4">
+          {/* Filtros recorridos */}
+          <div className="flex flex-wrap gap-3">
+            <select
+              value={filtroVehiculo}
+              onChange={(e) => setFiltroVehiculo(e.target.value)}
+              className="rounded-xl border border-gray-300 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">Todos los vehículos</option>
+              {vehiculos.map((v) => (
+                <option key={v} value={v}>{v}</option>
+              ))}
+            </select>
+
+            <div className="flex gap-1 flex-wrap">
+              {PERIODOS.map((p) => (
+                <button
+                  key={p.value}
+                  onClick={() => setFiltroPeriodo(p.value as Periodo)}
+                  className={`px-3 py-2 rounded-xl text-sm font-medium transition-colors ${
+                    filtroPeriodo === p.value
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-white border border-gray-300 text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Resumen recorridos */}
+          {!cargando && cerrados.length > 0 && (
+            <div className="grid grid-cols-3 gap-3">
+              <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-3 py-3 text-center">
+                <p className="text-xs text-gray-500">Recorridos</p>
+                <p className="text-lg font-bold text-gray-800">{cerrados.length}</p>
+              </div>
+              <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-3 py-3 text-center">
+                <p className="text-xs text-gray-500">KM totales</p>
+                <p className="text-lg font-bold text-gray-800">{totalKm.toLocaleString()}</p>
+              </div>
+              <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-3 py-3 text-center">
+                <p className="text-xs text-gray-500">Costo total</p>
+                <p className="text-lg font-bold text-gray-800">{formatMoneda(totalCosto)}</p>
+              </div>
+            </div>
+          )}
+
+          {error && <ErrorMessage mensaje={error} />}
+
+          {cargando ? (
+            <Loading texto="Cargando registros..." />
+          ) : registros.length === 0 ? (
+            <div className="text-center py-12 text-gray-400">
+              <span className="text-4xl">📋</span>
+              <p className="mt-2 text-sm">No hay registros para este filtro</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-2xl border border-gray-200 shadow-sm">
+              <table className="min-w-full bg-white text-sm">
+                <thead>
+                  <tr className="bg-gray-50 text-gray-600 text-xs uppercase tracking-wide">
+                    <th className="px-3 py-3 text-left whitespace-nowrap">Vehículo</th>
+                    <th className="px-3 py-3 text-left whitespace-nowrap">Conductor</th>
+                    <th className="px-3 py-3 text-left whitespace-nowrap">Salida</th>
+                    <th className="px-3 py-3 text-left whitespace-nowrap">Regreso</th>
+                    <th className="px-3 py-3 text-right whitespace-nowrap">KM sal.</th>
+                    <th className="px-3 py-3 text-right whitespace-nowrap">KM reg.</th>
+                    <th className="px-3 py-3 text-right whitespace-nowrap">KM rec.</th>
+                    <th className="px-3 py-3 text-right whitespace-nowrap">L. recargados</th>
+                    <th className="px-3 py-3 text-right whitespace-nowrap">L. consumidos</th>
+                    <th className="px-3 py-3 text-right whitespace-nowrap">Costo</th>
+                    <th className="px-3 py-3 text-right whitespace-nowrap">Rend.</th>
+                    <th className="px-3 py-3 text-center whitespace-nowrap">Paradas</th>
+                    <th className="px-3 py-3 text-center whitespace-nowrap">Foto sal.</th>
+                    <th className="px-3 py-3 text-center whitespace-nowrap">Foto reg.</th>
+                    <th className="px-3 py-3 text-center whitespace-nowrap">Estado</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {registros.map((r) => {
+                    const kmRec = r.km_regreso != null ? calcKmRecorridos(r.km_salida, r.km_regreso) : null
+                    const costo =
+                      r.litros_cargados && r.precio_litro
+                        ? calcImporte(r.litros_cargados, r.precio_litro)
+                        : null
+                    const litrosConsumidos =
+                      kmRec != null &&
+                      r.combustible_regreso != null &&
+                      r.vehiculos?.capacidad_tanque_litros
+                        ? calcLitrosConsumidos(
+                            r.vehiculos.capacidad_tanque_litros,
+                            r.combustible_salida,
+                            r.combustible_regreso,
+                            r.litros_cargados ?? 0
+                          )
+                        : null
+                    const rend =
+                      kmRec != null && litrosConsumidos != null && litrosConsumidos > 0
+                        ? calcRendimiento(kmRec, litrosConsumidos)
+                        : null
+
+                    return (
+                      <tr key={r.id} className="hover:bg-gray-50">
+                        <td className="px-3 py-3 font-medium whitespace-nowrap">{r.vehiculo_codigo}</td>
+                        <td className="px-3 py-3 whitespace-nowrap text-gray-600">
+                          {r.conductores?.nombre ?? '—'}
+                        </td>
+                        <td className="px-3 py-3 whitespace-nowrap text-gray-600">
+                          {formatFecha(r.fecha_salida)}
+                        </td>
+                        <td className="px-3 py-3 whitespace-nowrap text-gray-600">
+                          {r.fecha_regreso ? formatFecha(r.fecha_regreso) : '—'}
+                        </td>
+                        <td className="px-3 py-3 text-right whitespace-nowrap">
+                          {r.km_salida.toLocaleString()}
+                        </td>
+                        <td className="px-3 py-3 text-right whitespace-nowrap">
+                          {r.km_regreso?.toLocaleString() ?? '—'}
+                        </td>
+                        <td className="px-3 py-3 text-right font-medium whitespace-nowrap">
+                          {kmRec != null ? kmRec.toLocaleString() : '—'}
+                        </td>
+                        <td className="px-3 py-3 text-right whitespace-nowrap">
+                          {r.litros_cargados ? formatDecimal(r.litros_cargados) : '—'}
+                        </td>
+                        <td className="px-3 py-3 text-right whitespace-nowrap">
+                          {litrosConsumidos != null && litrosConsumidos > 0 ? formatDecimal(litrosConsumidos) : '—'}
+                        </td>
+                        <td className="px-3 py-3 text-right whitespace-nowrap">
+                          {costo != null ? formatMoneda(costo) : '—'}
+                        </td>
+                        <td className="px-3 py-3 text-right whitespace-nowrap">
+                          {rend != null ? `${formatDecimal(rend)} km/L` : '—'}
+                        </td>
+                        <td className="px-3 py-3 text-center whitespace-nowrap">
+                          {r.usa_paradas && r.recorridos_paradas.length > 0 ? (
+                            <button
+                              onClick={() => setParadasModal(r)}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-purple-50 hover:bg-purple-100 text-purple-700 text-xs font-semibold transition-colors"
+                              title="Ver paradas"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                              </svg>
+                              {r.recorridos_paradas.length}
+                            </button>
+                          ) : (
+                            <span className="text-gray-300 text-xs">—</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-3 text-center whitespace-nowrap">
+                          {r.foto_salida_path ? (
+                            <button
+                              onClick={() => setFotoModal({
+                                url: getPublicUrl(r.foto_salida_path!),
+                                titulo: `Foto salida — ${r.vehiculo_codigo} · ${formatFecha(r.fecha_salida)}`,
+                              })}
+                              className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-600 transition-colors"
+                              title="Ver foto de salida"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                              </svg>
+                            </button>
+                          ) : (
+                            <span className="text-gray-300 text-xs">—</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-3 text-center whitespace-nowrap">
+                          {r.foto_regreso_path ? (
+                            <button
+                              onClick={() => setFotoModal({
+                                url: getPublicUrl(r.foto_regreso_path!),
+                                titulo: `Foto regreso — ${r.vehiculo_codigo} · ${r.fecha_regreso ? formatFecha(r.fecha_regreso) : ''}`,
+                              })}
+                              className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-green-50 hover:bg-green-100 text-green-600 transition-colors"
+                              title="Ver foto de regreso"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                              </svg>
+                            </button>
+                          ) : (
+                            <span className="text-gray-300 text-xs">—</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-3 text-center whitespace-nowrap">
+                          <span
+                            className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
+                              r.estado === 'cerrado'
+                                ? 'bg-green-100 text-green-700'
+                                : 'bg-orange-100 text-orange-700'
+                            }`}
+                          >
+                            {r.estado === 'cerrado' ? 'Cerrado' : 'En ruta'}
+                          </span>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <p className="text-xs text-gray-400 text-center pb-6">Mostrando máximo 50 registros</p>
+        </div>
+      )}
+
+      {/* ─── Vista: Cargas de gasolina ─────────────────────────────────────── */}
+      {vistaActiva === 'cargas' && (
+        <div className="px-4 py-4 max-w-5xl mx-auto w-full space-y-4">
+
+          {/* Filtros cargas */}
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 space-y-3">
+            {/* Fechas */}
+            <div className="flex flex-wrap gap-3 items-end">
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-gray-500 font-medium">Desde</label>
+                <input
+                  type="date"
+                  value={filtroFechaInicio}
+                  onChange={(e) => setFiltroFechaInicio(e.target.value)}
+                  className="rounded-xl border border-gray-300 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-xs text-gray-500 font-medium">Hasta</label>
+                <input
+                  type="date"
+                  value={filtroFechaFin}
+                  onChange={(e) => setFiltroFechaFin(e.target.value)}
+                  className="rounded-xl border border-gray-300 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            {/* Vehículo, conductor, tipo */}
+            <div className="flex flex-wrap gap-3">
+              <select
+                value={filtroVehiculoCargas}
+                onChange={(e) => setFiltroVehiculoCargas(e.target.value)}
+                className="rounded-xl border border-gray-300 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">Todos los vehículos</option>
+                {vehiculosCargas.map((v) => (
+                  <option key={v} value={v}>{v}</option>
+                ))}
+              </select>
+
+              <select
+                value={filtroConductorCargas}
+                onChange={(e) => setFiltroConductorCargas(e.target.value)}
+                className="rounded-xl border border-gray-300 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">Todos los conductores</option>
+                {conductoresCargas.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+
+              <select
+                value={filtroTipoCarga}
+                onChange={(e) => setFiltroTipoCarga(e.target.value as TipoCarga)}
+                className="rounded-xl border border-gray-300 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="todas">Todos los tipos</option>
+                <option value="regreso_final">Regreso final</option>
+                <option value="parada_intermedia">Parada intermedia</option>
+              </select>
+            </div>
+          </div>
+
+          {errorCargas && <ErrorMessage mensaje={errorCargas} />}
+
+          {cargandoCargas ? (
+            <Loading texto="Cargando cargas de gasolina..." />
+          ) : (
+            <>
+              {/* Tarjetas de resumen */}
+              {cargasFiltradas.length > 0 && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-3 py-3 text-center">
+                    <p className="text-xs text-gray-500">Total cargas</p>
+                    <p className="text-lg font-bold text-gray-800">{cargasFiltradas.length}</p>
+                  </div>
+                  <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-3 py-3 text-center">
+                    <p className="text-xs text-gray-500">Total litros</p>
+                    <p className="text-lg font-bold text-gray-800">{formatDecimal(totalLitrosCargas, 3)} L</p>
+                  </div>
+                  <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-3 py-3 text-center">
+                    <p className="text-xs text-gray-500">Precio prom./L</p>
+                    <p className="text-lg font-bold text-gray-800">
+                      {promedioPrecioLitro > 0 ? `$${promedioPrecioLitro.toFixed(3)}` : '—'}
+                    </p>
+                  </div>
+                  <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-3 py-3 text-center">
+                    <p className="text-xs text-gray-500">Total gastado</p>
+                    <p className="text-lg font-bold text-blue-600">{formatMoneda(totalPesosCargas)}</p>
+                  </div>
+                </div>
+              )}
+
+              {cargasFiltradas.length === 0 ? (
+                <div className="text-center py-12 text-gray-400">
+                  <span className="text-4xl">⛽</span>
+                  <p className="mt-2 text-sm">No hay cargas de gasolina para este período</p>
+                </div>
+              ) : (
+                /* Tabla cargas — scroll horizontal en mobile */
+                <div className="overflow-x-auto rounded-2xl border border-gray-200 shadow-sm">
+                  <table className="min-w-full bg-white text-sm">
+                    <thead>
+                      <tr className="bg-gray-50 text-gray-600 text-xs uppercase tracking-wide">
+                        <th className="px-3 py-3 text-left whitespace-nowrap">Conductor</th>
+                        <th className="px-3 py-3 text-left whitespace-nowrap">Placa</th>
+                        <th className="px-3 py-3 text-left whitespace-nowrap">Modelo</th>
+                        <th className="px-3 py-3 text-left whitespace-nowrap">Tipo</th>
+                        <th className="px-3 py-3 text-left whitespace-nowrap">Fecha carga</th>
+                        <th className="px-3 py-3 text-right whitespace-nowrap">KM carga</th>
+                        <th className="px-3 py-3 text-right whitespace-nowrap">Litros</th>
+                        <th className="px-3 py-3 text-right whitespace-nowrap">$/L</th>
+                        <th className="px-3 py-3 text-right whitespace-nowrap">Costo total</th>
+                        <th className="px-3 py-3 text-left whitespace-nowrap">Sig. carga</th>
+                        <th className="px-3 py-3 text-right whitespace-nowrap">KM sig. carga</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {cargasFiltradas.map((c, idx) => (
+                        <tr key={`${c.recorrido_id}-${c.parada_id ?? 'regreso'}-${idx}`} className="hover:bg-gray-50">
+                          <td className="px-3 py-3 whitespace-nowrap font-medium text-gray-800">
+                            {c.conductor}
+                          </td>
+                          <td className="px-3 py-3 whitespace-nowrap text-gray-600">
+                            {c.placa ?? '—'}
+                          </td>
+                          <td className="px-3 py-3 whitespace-nowrap text-gray-600">
+                            {c.modelo ?? '—'}
+                          </td>
+                          <td className="px-3 py-3 whitespace-nowrap">
+                            <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
+                              c.tipo_carga === 'regreso_final'
+                                ? 'bg-green-100 text-green-700'
+                                : 'bg-purple-100 text-purple-700'
+                            }`}>
+                              {c.tipo_carga === 'regreso_final' ? 'Regreso final' : 'Parada intermedia'}
+                            </span>
+                          </td>
+                          <td className="px-3 py-3 whitespace-nowrap text-gray-600">
+                            {formatFecha(c.fecha_carga)}
+                          </td>
+                          <td className="px-3 py-3 text-right whitespace-nowrap">
+                            {c.km_carga.toLocaleString()}
+                          </td>
+                          <td className="px-3 py-3 text-right whitespace-nowrap font-medium">
+                            {c.litros_cargados.toFixed(3)} L
+                          </td>
+                          <td className="px-3 py-3 text-right whitespace-nowrap text-gray-600">
+                            ${c.precio_litro.toFixed(3)}
+                          </td>
+                          <td className="px-3 py-3 text-right whitespace-nowrap font-semibold text-blue-700">
+                            {formatMoneda(c.costo_total)}
+                          </td>
+                          <td className="px-3 py-3 whitespace-nowrap text-gray-500 text-xs">
+                            {c.fecha_siguiente_carga
+                              ? formatFecha(c.fecha_siguiente_carga)
+                              : <span className="text-gray-300 italic">Sin siguiente carga</span>
+                            }
+                          </td>
+                          <td className="px-3 py-3 text-right whitespace-nowrap text-gray-500">
+                            {c.km_siguiente_carga != null
+                              ? c.km_siguiente_carga.toLocaleString()
+                              : <span className="text-gray-300">—</span>
+                            }
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }

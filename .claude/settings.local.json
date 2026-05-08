@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"C:\\\\vehiculos\\\\.claude\\\\worktrees\\\\sweet-hoover-286aa3\\\\src\" -Recurse -Name)",
+      "Bash(xargs grep -l \"recorrido\\\\|Recorrido\")",
+      "Bash(npx tsc *)"
+    ]
+  }
+}
