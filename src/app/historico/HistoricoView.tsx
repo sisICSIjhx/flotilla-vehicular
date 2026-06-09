@@ -40,7 +40,7 @@ interface RecorridoHistorico {
   foto_regreso_path: string | null
   conductores: { nombre: string } | null
   centros_costo: { nombre: string } | null
-  vehiculos: { capacidad_tanque_litros: number } | null
+  vehiculos: { capacidad_tanque_litros: number; placa: string | null } | null
   recorridos_paradas: Parada[]
 }
 
@@ -80,7 +80,7 @@ export default function HistoricoView() {
 
   // ── Estado: Recorridos ────────────────────────────────────────────────────
   const [registros, setRegistros] = useState<RecorridoHistorico[]>([])
-  const [vehiculos, setVehiculos] = useState<string[]>([])
+  const [vehiculos, setVehiculos] = useState<{ codigo: string; placa: string | null }[]>([])
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [filtroVehiculo, setFiltroVehiculo] = useState('')
@@ -129,7 +129,7 @@ export default function HistoricoView() {
           litros_cargados, precio_litro, foto_salida_path, foto_regreso_path,
           conductores(nombre),
           centros_costo(nombre),
-          vehiculos(capacidad_tanque_litros),
+          vehiculos(capacidad_tanque_litros, placa),
           recorridos_paradas(id, orden, estado, km_parada, combustible_parada, litros_cargados, precio_litro, foto_parada_path, centros_costo(nombre))
         `)
         .order('fecha_salida', { ascending: false })
@@ -157,7 +157,9 @@ export default function HistoricoView() {
       const rows = (data ?? []) as RecorridoHistorico[]
       setRegistros(rows)
 
-      const unicos = [...new Set(rows.map((r) => r.vehiculo_codigo))].sort()
+      const unicos = [
+        ...new Map(rows.map((r) => [r.vehiculo_codigo, { codigo: r.vehiculo_codigo, placa: r.vehiculos?.placa ?? null }])).values(),
+      ].sort((a, b) => a.codigo.localeCompare(b.codigo))
       setVehiculos(unicos)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error al cargar histórico')
@@ -384,7 +386,7 @@ export default function HistoricoView() {
               <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
                 <div>
                   <p className="text-sm font-bold text-gray-800">
-                    {paradasModal.vehiculo_codigo} — Paradas del recorrido
+                    {paradasModal.vehiculo_codigo}{paradasModal.vehiculos?.placa ? ` — ${paradasModal.vehiculos.placa}` : ''} — Paradas del recorrido
                   </p>
                   <p className="text-xs text-gray-400 mt-0.5">{formatFecha(paradasModal.fecha_salida)}</p>
                 </div>
@@ -550,7 +552,9 @@ export default function HistoricoView() {
             >
               <option value="">Todos los vehículos</option>
               {vehiculos.map((v) => (
-                <option key={v} value={v}>{v}</option>
+                <option key={v.codigo} value={v.codigo}>
+                  {v.codigo}{v.placa ? ` — ${v.placa}` : ''}
+                </option>
               ))}
             </select>
 
@@ -645,7 +649,10 @@ export default function HistoricoView() {
 
                     return (
                       <tr key={r.id} className="hover:bg-gray-50">
-                        <td className="px-3 py-3 font-medium whitespace-nowrap">{r.vehiculo_codigo}</td>
+                        <td className="px-3 py-3 font-medium whitespace-nowrap">
+                          <div>{r.vehiculo_codigo}</div>
+                          {r.vehiculos?.placa && <div className="text-xs text-gray-400 font-normal">{r.vehiculos.placa}</div>}
+                        </td>
                         <td className="px-3 py-3 whitespace-nowrap text-gray-600">
                           {r.conductores?.nombre ?? '—'}
                         </td>

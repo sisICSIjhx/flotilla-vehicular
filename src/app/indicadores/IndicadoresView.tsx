@@ -120,7 +120,7 @@ const chartOptionsConLeyenda = {
 export default function IndicadoresView() {
   const router = useRouter()
   const [datos, setDatos] = useState<RecorridoCerrado[]>([])
-  const [vehiculos, setVehiculos] = useState<{ codigo: string; apodo: string | null }[]>([])
+  const [vehiculos, setVehiculos] = useState<{ codigo: string; apodo: string | null; placa: string | null }[]>([])
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -148,10 +148,10 @@ export default function IndicadoresView() {
   async function cargarVehiculos() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data } = await (supabase.from('vehiculos') as any)
-      .select('codigo, apodo')
+      .select('codigo, apodo, placa')
       .eq('estado', 'activo')
       .order('codigo', { ascending: true })
-    if (data) setVehiculos(data as { codigo: string; apodo: string | null }[])
+    if (data) setVehiculos(data as { codigo: string; apodo: string | null; placa: string | null }[])
   }
 
   function calcularRango(): { desde: string; hasta: string } {
@@ -213,11 +213,13 @@ export default function IndicadoresView() {
     ? datos.filter((r) => r.vehiculo_codigo === vehiculoFiltro)
     : datos
 
-  // Mapa codigo → apodo para labels de gráficas y tabla
+  // Mapas codigo → apodo / placa para labels de gráficas y tabla
   const apodoMap = Object.fromEntries(vehiculos.map((v) => [v.codigo, v.apodo]))
+  const placaMap = Object.fromEntries(vehiculos.map((v) => [v.codigo, v.placa]))
   const labelVehiculo = (codigo: string) => {
+    const placa = placaMap[codigo] ?? null
     const apodo = apodoMap[codigo] ?? datos.find((r) => r.vehiculo_codigo === codigo)?.vehiculos?.apodo
-    return apodo ? `${codigo} — ${apodo}` : codigo
+    return [placa, apodo].filter(Boolean).join(' — ') || codigo
   }
 
   // ── Cálculos globales ──────────────────────────────────────────────────────
@@ -458,7 +460,7 @@ export default function IndicadoresView() {
               <option value="">Todos los vehículos</option>
               {vehiculos.map((v) => {
                 const tieneDatos = datos.some((r) => r.vehiculo_codigo === v.codigo)
-                const label = v.apodo ? `${v.codigo} — ${v.apodo}` : v.codigo
+                const label = [v.codigo, v.placa, v.apodo].filter(Boolean).join(' — ')
                 return (
                   <option key={v.codigo} value={v.codigo}>
                     {label}{!tieneDatos ? ' (sin datos en este período)' : ''}
@@ -663,7 +665,10 @@ export default function IndicadoresView() {
                       const rend = calcRendimiento(km, litrosConsumidosVehiculo)
                       return (
                         <tr key={vehiculo} className="hover:bg-gray-50">
-                          <td className="px-4 py-3 font-medium whitespace-nowrap">{vehiculo}</td>
+                          <td className="px-4 py-3 font-medium whitespace-nowrap">
+                            <div>{vehiculo}</div>
+                            {placaMap[vehiculo] && <div className="text-xs text-gray-400 font-normal">{placaMap[vehiculo]}</div>}
+                          </td>
                           <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{apodo ?? '—'}</td>
                           <td className="px-4 py-3 text-right whitespace-nowrap">{km.toLocaleString()}</td>
                           <td className="px-4 py-3 text-right whitespace-nowrap">{litrosCargados ? formatDecimal(litrosCargados) : '—'}</td>
