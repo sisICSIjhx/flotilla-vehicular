@@ -197,8 +197,8 @@ CREATE TABLE IF NOT EXISTS recorridos (
   km_regreso INTEGER,
   combustible_regreso SMALLINT,
   foto_regreso_path TEXT,
-  litros_cargados DECIMAL(10,2),
-  precio_litro DECIMAL(10,2),
+  litros_cargados DECIMAL(10,3),
+  precio_litro DECIMAL(10,3),
 
   -- =======================================================
   -- ESTADO DEL RECORRIDO
@@ -263,8 +263,8 @@ CREATE TABLE IF NOT EXISTS recorridos_paradas (
   km_parada INTEGER,
   combustible_parada SMALLINT,
   foto_parada_path TEXT,
-  litros_cargados DECIMAL(10,2),
-  precio_litro DECIMAL(10,2),
+  litros_cargados DECIMAL(10,3),
+  precio_litro DECIMAL(10,3),
 
   -- =======================================================
   -- ESTADO DE LA PARADA

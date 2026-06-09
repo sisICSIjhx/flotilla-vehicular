@@ -314,12 +314,24 @@ export default function HistoricoView() {
     return true
   })
 
-  const vehiculosCargas = [...new Set(cargas.map((c) => c.vehiculo_codigo))].sort()
+  const vehiculosCargas = [
+    ...new Map(cargas.map((c) => [c.vehiculo_codigo, { codigo: c.vehiculo_codigo, placa: c.placa }])).values(),
+  ].sort((a, b) => a.codigo.localeCompare(b.codigo))
   const conductoresCargas = [...new Set(cargas.map((c) => c.conductor))].filter((n) => n !== '—').sort()
 
   const totalPesosCargas = cargasFiltradas.reduce((acc, c) => acc + c.costo_total, 0)
   const totalLitrosCargas = cargasFiltradas.reduce((acc, c) => acc + c.litros_cargados, 0)
   const promedioPrecioLitro = totalLitrosCargas > 0 ? totalPesosCargas / totalLitrosCargas : 0
+
+  function formatTiempoEntre(fecha1: string, fecha2: string): string {
+    const diffMs = new Date(fecha2).getTime() - new Date(fecha1).getTime()
+    if (diffMs <= 0) return '—'
+    const totalHours = Math.floor(diffMs / (1000 * 60 * 60))
+    const days = Math.floor(totalHours / 24)
+    const hours = totalHours % 24
+    if (days > 0) return `${days}d ${hours}h`
+    return `${hours}h`
+  }
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -777,7 +789,9 @@ export default function HistoricoView() {
               >
                 <option value="">Todos los vehículos</option>
                 {vehiculosCargas.map((v) => (
-                  <option key={v} value={v}>{v}</option>
+                  <option key={v.codigo} value={v.codigo}>
+                    {v.codigo}{v.placa ? ` — ${v.placa}` : ''}
+                  </option>
                 ))}
               </select>
 
@@ -856,6 +870,7 @@ export default function HistoricoView() {
                         <th className="px-3 py-3 text-right whitespace-nowrap">Costo total</th>
                         <th className="px-3 py-3 text-left whitespace-nowrap">Sig. carga</th>
                         <th className="px-3 py-3 text-right whitespace-nowrap">KM sig. carga</th>
+                        <th className="px-3 py-3 text-right whitespace-nowrap">Tiempo entre cargas</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
@@ -903,6 +918,12 @@ export default function HistoricoView() {
                           <td className="px-3 py-3 text-right whitespace-nowrap text-gray-500">
                             {c.km_siguiente_carga != null
                               ? c.km_siguiente_carga.toLocaleString()
+                              : <span className="text-gray-300">—</span>
+                            }
+                          </td>
+                          <td className="px-3 py-3 text-right whitespace-nowrap">
+                            {c.fecha_siguiente_carga
+                              ? <span className="font-medium text-gray-700">{formatTiempoEntre(c.fecha_carga, c.fecha_siguiente_carga)}</span>
                               : <span className="text-gray-300">—</span>
                             }
                           </td>
