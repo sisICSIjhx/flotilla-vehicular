@@ -39,7 +39,7 @@ export default function HistoricoView() {
 
   // ── Estado: Recorridos ────────────────────────────────────────────────────
   const [registros, setRegistros] = useState<RecorridoHistorico[]>([])
-  const [vehiculos, setVehiculos] = useState<{ codigo: string; placa: string | null }[]>([])
+  const [vehiculos, setVehiculos] = useState<{ codigo: string; placa: string | null; apodo: string | null }[]>([])
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [filtroVehiculo, setFiltroVehiculo] = useState('')
@@ -103,7 +103,7 @@ export default function HistoricoView() {
       setRegistros(rows)
 
       const unicos = [
-        ...new Map(rows.map((r) => [r.vehiculo_codigo, { codigo: r.vehiculo_codigo, placa: r.vehiculos?.placa ?? null }])).values(),
+        ...new Map(rows.map((r) => [r.vehiculo_codigo, { codigo: r.vehiculo_codigo, placa: r.vehiculos?.placa ?? null, apodo: r.vehiculos?.apodo ?? null }])).values(),
       ].sort((a, b) => a.codigo.localeCompare(b.codigo))
       setVehiculos(unicos)
     } catch (err) {
@@ -548,7 +548,7 @@ export default function HistoricoView() {
               <option value="">Todos los vehículos</option>
               {vehiculos.map((v) => (
                 <option key={v.codigo} value={v.codigo}>
-                  {v.codigo}{v.placa ? ` — ${v.placa}` : ''}
+                  {v.codigo}{v.placa ? ` — ${v.placa}` : ''}{v.apodo ? ` — ${v.apodo}` : ''}
                 </option>
               ))}
             </select>
@@ -654,7 +654,7 @@ export default function HistoricoView() {
                       <tr key={r.id} className="hover:bg-gray-50">
                         <td className="px-3 py-3 font-medium whitespace-nowrap">
                           <div>{r.vehiculo_codigo}</div>
-                          {r.vehiculos?.placa && <div className="text-xs text-gray-400 font-normal">{r.vehiculos.placa}{r.vehiculos.apodo ? ` — ${r.vehiculos.apodo}` : ''}</div>}
+                          {r.vehiculos?.placa && <div className="text-xs text-gray-400 font-normal">{r.vehiculos.placa}</div>}
                         </td>
                         <td className="px-3 py-3 whitespace-nowrap text-gray-600">
                           {r.conductores?.nombre ?? '—'}

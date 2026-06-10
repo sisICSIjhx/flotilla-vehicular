@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "PowerShell($texto = [System.IO.File]::ReadAllText\\('C:\\\\vehiculos\\\\src\\\\utils\\\\export\\\\csv.ts'\\); $bom = [string][char]0xFEFF; $nuevo = $texto.Replace\\(\"'$bom'\", \"'﻿'\"\\); [System.IO.File]::WriteAllText\\('C:\\\\vehiculos\\\\src\\\\utils\\\\export\\\\csv.ts', $nuevo, \\(New-Object System.Text.UTF8Encoding $false\\)\\); Select-String -Path C:\\\\vehiculos\\\\src\\\\utils\\\\export\\\\csv.ts -Pattern 'uFEFF' | ForEach-Object Line)",
+      "PowerShell(npm run lint)",
+      "PowerShell(if \\(-not \\(Test-Path C:\\\\vehiculos\\\\.claude\\\\launch.json\\)\\) { '{ \"version\": \"0.0.1\", \"configurations\": [ { \"name\": \"dev\", \"runtimeExecutable\": \"npm\", \"runtimeArgs\": [\"run\", \"dev\"], \"port\": 3000 } ] }' | Out-File -Encoding utf8 C:\\\\vehiculos\\\\.claude\\\\launch.json }; Get-Content C:\\\\vehiculos\\\\.claude\\\\launch.json)",
+      "mcp__Claude_Preview__preview_start",
+      "mcp__Claude_in_Chrome__list_connected_browsers"
     ]
   }
 }
