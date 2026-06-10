@@ -2,19 +2,6 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  BarElement,
-  LineElement,
-  PointElement,
-  LineController,
-  BarController,
-  Title,
-  Tooltip,
-  Legend,
-} from 'chart.js'
 import { Chart } from 'react-chartjs-2'
 import {
   startOfDay,
@@ -35,16 +22,21 @@ import { calcKmRecorridos, calcImporte, calcLitrosConsumidos, calcRendimiento } 
 import { formatMoneda, formatDecimal } from '@/utils/formatters'
 import Loading from '@/components/common/Loading'
 import ErrorMessage from '@/components/common/ErrorMessage'
-
-ChartJS.register(
-  CategoryScale, LinearScale,
-  BarElement, BarController,
-  LineElement, LineController, PointElement,
-  Title, Tooltip, Legend
-)
-
-type TipoFiltro = 'dia' | 'semana' | 'mes' | 'rango'
-type TipoGrafica = 'barras' | 'tendencia' | 'ambas'
+import ExportButtons from '@/components/common/ExportButtons'
+import {
+  buildDatasets,
+  chartOptions,
+  chartOptionsConLeyenda,
+  type TipoFiltro,
+  type TipoGrafica,
+} from './chartConfig'
+import {
+  exportarIndicadoresCsv,
+  exportarIndicadoresXlsx,
+  exportarIndicadoresPdf,
+  type DatosIndicadores,
+  type ResumenVehiculo,
+} from './exportIndicadores'
 
 interface RecorridoCerrado {
   vehiculo_codigo: string
@@ -72,49 +64,6 @@ function inicioSemanaActual() {
 }
 function mesAnioActual() {
   return format(new Date(), 'yyyy-MM')
-}
-
-function buildDatasets(
-  data: number[],
-  label: string,
-  rgba: string,
-  tipo: TipoGrafica
-) {
-  const solid = rgba.replace(/[\d.]+\)$/, '1)')
-  const faded = rgba.replace(/[\d.]+\)$/, '0.45)')
-  const bar = {
-    type: 'bar' as const,
-    label,
-    data,
-    backgroundColor: tipo === 'ambas' ? faded : rgba,
-    borderRadius: 6,
-  }
-  const line = {
-    type: 'line' as const,
-    label,
-    data,
-    borderColor: solid,
-    backgroundColor: 'transparent',
-    borderWidth: 2.5,
-    pointRadius: 4,
-    pointBackgroundColor: solid,
-    tension: 0.4,
-  }
-  if (tipo === 'barras') return [bar]
-  if (tipo === 'tendencia') return [line]
-  return [bar, { ...line, label: `${label} (tendencia)` }]
-}
-
-const chartOptions = {
-  responsive: true,
-  plugins: { legend: { display: false } },
-  scales: { y: { beginAtZero: true } },
-}
-
-const chartOptionsConLeyenda = {
-  responsive: true,
-  plugins: { legend: { display: true, position: 'bottom' as const, labels: { boxWidth: 12, font: { size: 11 } } } },
-  scales: { y: { beginAtZero: true } },
 }
 
 export default function IndicadoresView() {
@@ -310,6 +259,93 @@ export default function IndicadoresView() {
 
   // ── Labels ─────────────────────────────────────────────────────────────────
   const labelPeriodo = esPorDia ? 'KM por día' : 'KM por mes'
+
+  // ── Resumen por vehículo (tabla + exportación) ─────────────────────────────
+  const resumenVehiculos: ResumenVehiculo[] = vehiculosOrdenados.map(([vehiculo, km]) => {
+    const apodo = apodoMap[vehiculo] ?? datos.find((r) => r.vehiculo_codigo === vehiculo)?.vehiculos?.apodo ?? null
+    const litrosCargados = datosFiltrados
+      .filter((r) => r.vehiculo_codigo === vehiculo)
+      .reduce((acc, r) => acc + (r.litros_cargados ?? 0), 0)
+    const litrosConsumidos = datosFiltrados
+      .filter((r) => r.vehiculo_codigo === vehiculo && r.vehiculos?.capacidad_tanque_litros)
+      .reduce((acc, r) => {
+        const l = calcLitrosConsumidos(
+          r.vehiculos!.capacidad_tanque_litros,
+          r.combustible_salida,
+          r.combustible_regreso,
+          r.litros_cargados ?? 0
+        )
+        return l > 0 ? acc + l : acc
+      }, 0)
+    return {
+      codigo: vehiculo,
+      placa: placaMap[vehiculo] ?? null,
+      apodo,
+      km,
+      litrosCargados,
+      litrosConsumidos,
+      rendimiento: calcRendimiento(km, litrosConsumidos),
+      costo: costoPorVehiculo[vehiculo] ?? 0,
+    }
+  })
+
+  // ── Exportación ────────────────────────────────────────────────────────────
+  function descripcionPeriodo(): string {
+    switch (tipo) {
+      case 'dia':
+        return format(parseISO(fechaDia), "d 'de' MMMM 'de' yyyy", { locale: es })
+      case 'semana':
+        return `Semana del ${format(parseISO(semanaRef), 'd MMM', { locale: es })} al ${format(
+          endOfWeek(parseISO(semanaRef), { weekStartsOn: 1 }), 'd MMM yyyy', { locale: es }
+        )}`
+      case 'mes':
+        return format(parseISO(`${mesAnio}-01`), 'MMMM yyyy', { locale: es })
+      case 'rango':
+        return `Del ${rangoDesde} al ${rangoHasta}`
+    }
+  }
+
+  function datosParaExportar(): DatosIndicadores {
+    return {
+      filtros: [
+        { etiqueta: 'Período', valor: descripcionPeriodo() },
+        { etiqueta: 'Vehículo', valor: vehiculoFiltro ? labelVehiculo(vehiculoFiltro) : 'Todos' },
+      ],
+      unidadPeriodo: esPorDia ? 'por día' : 'por mes',
+      tipoGrafica,
+      vehiculoFiltrado: Boolean(vehiculoFiltro),
+      totales: {
+        recorridos: datosFiltrados.length,
+        km: totalKm,
+        litrosRecargados: Object.values(litrosRecPorPeriodo).reduce((a, b) => a + b, 0),
+        litrosConsumidos: totalLitrosConsumidos,
+        costo: totalCosto,
+        rendimientoPromedio: rendimientoPromedio,
+      },
+      kmPorVehiculo: {
+        labels: vehiculosOrdenados.map(([v]) => labelVehiculo(v)),
+        values: vehiculosOrdenados.map(([, km]) => km),
+      },
+      kmPorPeriodo: {
+        labels: Object.keys(kmPorPeriodo),
+        values: Object.values(kmPorPeriodo),
+      },
+      rendimientoPorPeriodo: { labels: rendLabels, values: rendValues },
+      litrosConsumidosPorPeriodo: {
+        labels: rendLabels,
+        values: rendLabels.map((k) => Math.round(rendAcum[k].litros * 100) / 100),
+      },
+      litrosRecargadosPorPeriodo: {
+        labels: Object.keys(litrosRecPorPeriodo),
+        values: Object.values(litrosRecPorPeriodo).map((v) => Math.round(v * 100) / 100),
+      },
+      costoPorVehiculo: {
+        labels: vehiculosCostoOrdenados.map(([v]) => labelVehiculo(v)),
+        values: vehiculosCostoOrdenados.map(([, c]) => c),
+      },
+      resumenVehiculos,
+    }
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-50">
@@ -514,6 +550,13 @@ export default function IndicadoresView() {
               </div>
             </div>
 
+            {/* Exportar indicadores */}
+            <ExportButtons
+              onCsv={() => exportarIndicadoresCsv(datosParaExportar())}
+              onXlsx={() => exportarIndicadoresXlsx(datosParaExportar())}
+              onPdf={() => exportarIndicadoresPdf(datosParaExportar())}
+            />
+
             {/* KM por vehículo */}
             {!vehiculoFiltro && (
               <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 space-y-3">
@@ -645,41 +688,22 @@ export default function IndicadoresView() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {vehiculosOrdenados.map(([vehiculo, km]) => {
-                      const apodo = apodoMap[vehiculo] ?? datos.find((r) => r.vehiculo_codigo === vehiculo)?.vehiculos?.apodo
-                      const litrosCargados = datosFiltrados
-                        .filter((r) => r.vehiculo_codigo === vehiculo)
-                        .reduce((acc, r) => acc + (r.litros_cargados ?? 0), 0)
-                      const litrosConsumidosVehiculo = datosFiltrados
-                        .filter((r) => r.vehiculo_codigo === vehiculo && r.vehiculos?.capacidad_tanque_litros)
-                        .reduce((acc, r) => {
-                          const l = calcLitrosConsumidos(
-                            r.vehiculos!.capacidad_tanque_litros,
-                            r.combustible_salida,
-                            r.combustible_regreso,
-                            r.litros_cargados ?? 0
-                          )
-                          return l > 0 ? acc + l : acc
-                        }, 0)
-                      const costo = costoPorVehiculo[vehiculo] ?? 0
-                      const rend = calcRendimiento(km, litrosConsumidosVehiculo)
-                      return (
-                        <tr key={vehiculo} className="hover:bg-gray-50">
-                          <td className="px-4 py-3 font-medium whitespace-nowrap">
-                            <div>{vehiculo}</div>
-                            {placaMap[vehiculo] && <div className="text-xs text-gray-400 font-normal">{placaMap[vehiculo]}</div>}
-                          </td>
-                          <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{apodo ?? '—'}</td>
-                          <td className="px-4 py-3 text-right whitespace-nowrap">{km.toLocaleString()}</td>
-                          <td className="px-4 py-3 text-right whitespace-nowrap">{litrosCargados ? formatDecimal(litrosCargados) : '—'}</td>
-                          <td className="px-4 py-3 text-right whitespace-nowrap">{litrosConsumidosVehiculo > 0 ? formatDecimal(litrosConsumidosVehiculo) : '—'}</td>
-                          <td className="px-4 py-3 text-right whitespace-nowrap">
-                            {rend ? `${formatDecimal(rend)} km/L` : '—'}
-                          </td>
-                          <td className="px-4 py-3 text-right whitespace-nowrap">{costo ? formatMoneda(costo) : '—'}</td>
-                        </tr>
-                      )
-                    })}
+                    {resumenVehiculos.map((v) => (
+                      <tr key={v.codigo} className="hover:bg-gray-50">
+                        <td className="px-4 py-3 font-medium whitespace-nowrap">
+                          <div>{v.codigo}</div>
+                          {v.placa && <div className="text-xs text-gray-400 font-normal">{v.placa}</div>}
+                        </td>
+                        <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{v.apodo ?? '—'}</td>
+                        <td className="px-4 py-3 text-right whitespace-nowrap">{v.km.toLocaleString()}</td>
+                        <td className="px-4 py-3 text-right whitespace-nowrap">{v.litrosCargados ? formatDecimal(v.litrosCargados) : '—'}</td>
+                        <td className="px-4 py-3 text-right whitespace-nowrap">{v.litrosConsumidos > 0 ? formatDecimal(v.litrosConsumidos) : '—'}</td>
+                        <td className="px-4 py-3 text-right whitespace-nowrap">
+                          {v.rendimiento ? `${formatDecimal(v.rendimiento)} km/L` : '—'}
+                        </td>
+                        <td className="px-4 py-3 text-right whitespace-nowrap">{v.costo ? formatMoneda(v.costo) : '—'}</td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>

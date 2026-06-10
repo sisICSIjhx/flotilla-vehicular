@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { startOfWeek, startOfMonth, endOfMonth, subMonths, format } from 'date-fns'
+import { format } from 'date-fns'
 import { supabase } from '@/lib/supabase'
 import { calcKmRecorridos, calcImporte, calcLitrosConsumidos, calcRendimiento } from '@/lib/calculations'
 import { formatFecha, formatMoneda, formatDecimal } from '@/utils/formatters'
@@ -10,67 +10,26 @@ import { combustibleLabel } from '@/lib/constants'
 import { getPublicUrl } from '@/utils/storage'
 import Loading from '@/components/common/Loading'
 import ErrorMessage from '@/components/common/ErrorMessage'
-
-interface Parada {
-  id: string
-  orden: number
-  estado: string
-  km_parada: number | null
-  combustible_parada: number | null
-  litros_cargados: number | null
-  precio_litro: number | null
-  foto_parada_path: string | null
-  centros_costo: { nombre: string } | null
-}
-
-interface RecorridoHistorico {
-  id: string
-  vehiculo_codigo: string
-  estado: string
-  usa_paradas: boolean
-  fecha_salida: string
-  fecha_regreso: string | null
-  km_salida: number
-  km_regreso: number | null
-  combustible_salida: number
-  combustible_regreso: number | null
-  litros_cargados: number | null
-  precio_litro: number | null
-  foto_salida_path: string | null
-  foto_regreso_path: string | null
-  conductores: { nombre: string } | null
-  centros_costo: { nombre: string } | null
-  vehiculos: { capacidad_tanque_litros: number; placa: string | null } | null
-  recorridos_paradas: Parada[]
-}
-
-interface CargaGasolina {
-  recorrido_id: string
-  parada_id: string | null
-  tipo_carga: 'regreso_final' | 'parada_intermedia'
-  vehiculo_codigo: string
-  placa: string | null
-  modelo: string | null
-  conductor: string
-  fecha_carga: string
-  km_carga: number
-  litros_cargados: number
-  precio_litro: number
-  costo_total: number
-  fecha_siguiente_carga: string | null
-  km_siguiente_carga: number | null
-}
-
-type Periodo = 'todo' | 'semana' | 'mes' | 'mes_anterior'
-type VistaActiva = 'recorridos' | 'cargas'
-type TipoCarga = 'todas' | 'regreso_final' | 'parada_intermedia'
-
-const PERIODOS = [
-  { value: 'todo', label: 'Todo' },
-  { value: 'semana', label: 'Esta semana' },
-  { value: 'mes', label: 'Este mes' },
-  { value: 'mes_anterior', label: 'Mes anterior' },
-]
+import ExportButtons from '@/components/common/ExportButtons'
+import {
+  PERIODOS,
+  type CargaGasolina,
+  type Periodo,
+  type RecorridoHistorico,
+  type TipoCarga,
+  type VistaActiva,
+} from './types'
+import {
+  aplicarFiltrosRecorridos,
+  contarRecorridos,
+  fetchRecorridosCompletos,
+  exportarRecorridosCsv,
+  exportarRecorridosXlsx,
+  exportarRecorridosPdf,
+  exportarCargasCsv,
+  exportarCargasXlsx,
+  exportarCargasPdf,
+} from './exportHistorico'
 
 export default function HistoricoView() {
   const router = useRouter()
@@ -129,27 +88,13 @@ export default function HistoricoView() {
           litros_cargados, precio_litro, foto_salida_path, foto_regreso_path,
           conductores(nombre),
           centros_costo(nombre),
-          vehiculos(capacidad_tanque_litros, placa),
+          vehiculos(capacidad_tanque_litros, placa, apodo),
           recorridos_paradas(id, orden, estado, km_parada, combustible_parada, litros_cargados, precio_litro, foto_parada_path, centros_costo(nombre))
         `)
         .order('fecha_salida', { ascending: false })
         .limit(50)
 
-      if (filtroVehiculo) {
-        query = query.eq('vehiculo_codigo', filtroVehiculo)
-      }
-
-      const now = new Date()
-      if (filtroPeriodo === 'semana') {
-        query = query.gte('fecha_salida', startOfWeek(now, { weekStartsOn: 1 }).toISOString())
-      } else if (filtroPeriodo === 'mes') {
-        query = query.gte('fecha_salida', startOfMonth(now).toISOString())
-      } else if (filtroPeriodo === 'mes_anterior') {
-        const prev = subMonths(now, 1)
-        query = query
-          .gte('fecha_salida', startOfMonth(prev).toISOString())
-          .lte('fecha_salida', endOfMonth(prev).toISOString())
-      }
+      query = aplicarFiltrosRecorridos(query, filtroVehiculo, filtroPeriodo)
 
       const { data, error: qError } = await query
       if (qError) throw new Error(qError.message)
@@ -324,6 +269,56 @@ export default function HistoricoView() {
   const totalPesosCargas = cargasFiltradas.reduce((acc, c) => acc + c.costo_total, 0)
   const totalLitrosCargas = cargasFiltradas.reduce((acc, c) => acc + c.litros_cargados, 0)
   const promedioPrecioLitro = totalLitrosCargas > 0 ? totalPesosCargas / totalLitrosCargas : 0
+
+  // ── Exportación ───────────────────────────────────────────────────────────
+  // La tabla muestra máximo 50, pero la descarga trae TODOS los registros
+  // que coinciden con los filtros. Con el período "Todo" se confirma antes
+  // para evitar descargas enormes accidentales.
+  async function obtenerRecorridosParaExportar(): Promise<RecorridoHistorico[] | null> {
+    if (filtroPeriodo === 'todo') {
+      const total = await contarRecorridos(filtroVehiculo, filtroPeriodo)
+      if (total > 200) {
+        const continuar = window.confirm(
+          `El período "Todo" incluye ${total.toLocaleString()} recorridos. ` +
+          `¿Descargar todos? Para un archivo más pequeño, elige un período más corto antes de exportar.`
+        )
+        if (!continuar) return null
+      }
+    }
+    const datos = await fetchRecorridosCompletos(filtroVehiculo, filtroPeriodo)
+    if (datos.length === 0) throw new Error('No hay registros para exportar con los filtros actuales')
+    return datos
+  }
+
+  async function exportarRecorridos(formato: 'csv' | 'xlsx' | 'pdf') {
+    const datos = await obtenerRecorridosParaExportar()
+    if (!datos) return
+    if (formato === 'csv') exportarRecorridosCsv(datos)
+    else if (formato === 'xlsx') exportarRecorridosXlsx(datos)
+    else exportarRecorridosPdf(datos, filtroVehiculo, filtroPeriodo)
+  }
+
+  function exportarCargas(formato: 'csv' | 'xlsx' | 'pdf') {
+    if (cargasFiltradas.length === 0) {
+      throw new Error('No hay cargas para exportar con los filtros actuales')
+    }
+    if (formato === 'csv') exportarCargasCsv(cargasFiltradas)
+    else if (formato === 'xlsx') exportarCargasXlsx(cargasFiltradas)
+    else {
+      exportarCargasPdf(cargasFiltradas, {
+        fechaInicio: filtroFechaInicio,
+        fechaFin: filtroFechaFin,
+        vehiculo: filtroVehiculoCargas,
+        conductor: filtroConductorCargas,
+        tipo:
+          filtroTipoCarga === 'todas'
+            ? 'Todos los tipos'
+            : filtroTipoCarga === 'regreso_final'
+              ? 'Regreso final'
+              : 'Parada intermedia',
+      })
+    }
+  }
 
   function formatTiempoEntre(fecha1: string, fecha2: string): string {
     const diffMs = new Date(fecha2).getTime() - new Date(fecha1).getTime()
@@ -575,6 +570,14 @@ export default function HistoricoView() {
             </div>
           </div>
 
+          {/* Exportar recorridos */}
+          <ExportButtons
+            onCsv={() => exportarRecorridos('csv')}
+            onXlsx={() => exportarRecorridos('xlsx')}
+            onPdf={() => exportarRecorridos('pdf')}
+            deshabilitado={cargando || registros.length === 0}
+          />
+
           {/* Resumen recorridos */}
           {!cargando && cerrados.length > 0 && (
             <div className="grid grid-cols-3 gap-3">
@@ -651,7 +654,7 @@ export default function HistoricoView() {
                       <tr key={r.id} className="hover:bg-gray-50">
                         <td className="px-3 py-3 font-medium whitespace-nowrap">
                           <div>{r.vehiculo_codigo}</div>
-                          {r.vehiculos?.placa && <div className="text-xs text-gray-400 font-normal">{r.vehiculos.placa}</div>}
+                          {r.vehiculos?.placa && <div className="text-xs text-gray-400 font-normal">{r.vehiculos.placa}{r.vehiculos.apodo ? ` — ${r.vehiculos.apodo}` : ''}</div>}
                         </td>
                         <td className="px-3 py-3 whitespace-nowrap text-gray-600">
                           {r.conductores?.nombre ?? '—'}
@@ -755,7 +758,9 @@ export default function HistoricoView() {
             </div>
           )}
 
-          <p className="text-xs text-gray-400 text-center pb-6">Mostrando máximo 50 registros</p>
+          <p className="text-xs text-gray-400 text-center pb-6">
+            Mostrando máximo 50 registros. La descarga incluye todos los registros filtrados.
+          </p>
         </div>
       )}
 
@@ -824,6 +829,14 @@ export default function HistoricoView() {
               </select>
             </div>
           </div>
+
+          {/* Exportar cargas */}
+          <ExportButtons
+            onCsv={() => exportarCargas('csv')}
+            onXlsx={() => exportarCargas('xlsx')}
+            onPdf={() => exportarCargas('pdf')}
+            deshabilitado={cargandoCargas || cargasFiltradas.length === 0}
+          />
 
           {errorCargas && <ErrorMessage mensaje={errorCargas} />}
 
