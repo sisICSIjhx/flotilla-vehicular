@@ -248,11 +248,13 @@ export default function HistoricoView() {
     (acc, r) => acc + (r.km_regreso != null ? calcKmRecorridos(r.km_salida, r.km_regreso) : 0),
     0
   )
-  const totalCosto = cerrados.reduce(
-    (acc, r) =>
-      acc + (r.litros_cargados && r.precio_litro ? calcImporte(r.litros_cargados, r.precio_litro) : 0),
-    0
-  )
+  const totalCosto = cerrados.reduce((acc, r) => {
+    const costoReg = r.litros_cargados && r.precio_litro ? calcImporte(r.litros_cargados, r.precio_litro) : 0
+    const costoPar = r.recorridos_paradas.reduce(
+      (pacc, p) => pacc + (p.litros_cargados && p.precio_litro ? calcImporte(p.litros_cargados, p.precio_litro) : 0), 0
+    )
+    return acc + costoReg + costoPar
+  }, 0)
 
   // ── Totales y filtros cargas ──────────────────────────────────────────────
   const cargasFiltradas = cargas.filter((c) => {
@@ -630,10 +632,14 @@ export default function HistoricoView() {
                 <tbody className="divide-y divide-gray-100">
                   {registros.map((r) => {
                     const kmRec = r.km_regreso != null ? calcKmRecorridos(r.km_salida, r.km_regreso) : null
-                    const costo =
-                      r.litros_cargados && r.precio_litro
-                        ? calcImporte(r.litros_cargados, r.precio_litro)
-                        : null
+                    const litrosParadas = r.recorridos_paradas.reduce((acc, p) => acc + (p.litros_cargados ?? 0), 0)
+                    const costoParadas = r.recorridos_paradas.reduce(
+                      (acc, p) => acc + (p.litros_cargados && p.precio_litro ? calcImporte(p.litros_cargados, p.precio_litro) : 0), 0
+                    )
+                    const totalLitros = (r.litros_cargados ?? 0) + litrosParadas
+                    const costoRegresoFinal = r.litros_cargados && r.precio_litro ? calcImporte(r.litros_cargados, r.precio_litro) : 0
+                    const costoTotal = costoRegresoFinal + costoParadas
+                    const costo = costoTotal > 0 ? costoTotal : null
                     const litrosConsumidos =
                       kmRec != null &&
                       r.combustible_regreso != null &&
@@ -642,7 +648,7 @@ export default function HistoricoView() {
                             r.vehiculos.capacidad_tanque_litros,
                             r.combustible_salida,
                             r.combustible_regreso,
-                            r.litros_cargados ?? 0
+                            totalLitros
                           )
                         : null
                     const rend =
@@ -675,7 +681,7 @@ export default function HistoricoView() {
                           {kmRec != null ? kmRec.toLocaleString() : '—'}
                         </td>
                         <td className="px-3 py-3 text-right whitespace-nowrap">
-                          {r.litros_cargados ? formatDecimal(r.litros_cargados) : '—'}
+                          {totalLitros > 0 ? formatDecimal(totalLitros) : '—'}
                         </td>
                         <td className="px-3 py-3 text-right whitespace-nowrap">
                           {litrosConsumidos != null && litrosConsumidos > 0 ? formatDecimal(litrosConsumidos) : '—'}

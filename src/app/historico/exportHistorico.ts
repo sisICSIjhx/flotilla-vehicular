@@ -105,24 +105,24 @@ function calcularRecorrido(r: RecorridoHistorico): RecorridoCalculado {
   const kmRec = r.km_regreso != null ? calcKmRecorridos(r.km_salida, r.km_regreso) : null
   const costo =
     r.litros_cargados && r.precio_litro ? calcImporte(r.litros_cargados, r.precio_litro) : null
+  const litrosParadas = r.recorridos_paradas.reduce((acc, p) => acc + (p.litros_cargados ?? 0), 0)
+  const costoParadas = r.recorridos_paradas.reduce(
+    (acc, p) => acc + (p.litros_cargados && p.precio_litro ? calcImporte(p.litros_cargados, p.precio_litro) : 0),
+    0
+  )
   const litrosConsumidos =
     kmRec != null && r.combustible_regreso != null && r.vehiculos?.capacidad_tanque_litros
       ? calcLitrosConsumidos(
           r.vehiculos.capacidad_tanque_litros,
           r.combustible_salida,
           r.combustible_regreso,
-          r.litros_cargados ?? 0
+          (r.litros_cargados ?? 0) + litrosParadas
         )
       : null
   const rendimiento =
     kmRec != null && litrosConsumidos != null && litrosConsumidos > 0
       ? calcRendimiento(kmRec, litrosConsumidos)
       : null
-  const litrosParadas = r.recorridos_paradas.reduce((acc, p) => acc + (p.litros_cargados ?? 0), 0)
-  const costoParadas = r.recorridos_paradas.reduce(
-    (acc, p) => acc + (p.litros_cargados && p.precio_litro ? calcImporte(p.litros_cargados, p.precio_litro) : 0),
-    0
-  )
   return { r, kmRec, litrosConsumidos, costo, rendimiento, litrosParadas, costoParadas }
 }
 
