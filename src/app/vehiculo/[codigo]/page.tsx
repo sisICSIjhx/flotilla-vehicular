@@ -8,6 +8,14 @@ import Button from '@/components/common/Button'
 import { formatFecha } from '@/utils/formatters'
 import { combustibleLabel } from '@/lib/constants'
 
+interface UltimaCarga {
+  litros_cargados: number
+  precio_litro: number
+  km_antes: number
+  km_despues: number
+  created_at: string
+}
+
 type SiguienteAccion = 'salida' | 'parada' | 'regreso'
 type Estado = 'cargando' | 'no_encontrado' | 'disponible' | 'en_ruta'
 
@@ -23,6 +31,7 @@ export default function VehiculoPage() {
   const [paradaPendiente, setParadaPendiente] = useState<RecorridoParada | null>(null)
   const [nombreCentroPendiente, setNombreCentroPendiente] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [ultimaCarga, setUltimaCarga] = useState<UltimaCarga | null>(null)
 
   useEffect(() => {
     async function verificar() {
@@ -41,7 +50,21 @@ export default function VehiculoPage() {
 
         setVehiculo(veh as Vehiculo)
 
-        // 2. Buscar recorrido abierto
+        // 2. Cargar última carga de gasolina
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: carga } = await (supabase.from('cargas_gasolina') as any)
+            .select('litros_cargados, precio_litro, km_antes, km_despues, created_at')
+            .eq('vehiculo_codigo', codigo)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+          if (carga) setUltimaCarga(carga as UltimaCarga)
+        } catch {
+          // tabla aún no existe — ignorar silenciosamente
+        }
+
+        // 3. Buscar recorrido abierto
         const { data: rec } = await supabase
           .from('recorridos')
           .select('*')
@@ -216,6 +239,38 @@ export default function VehiculoPage() {
                 ? `Completar parada #${paradaPendiente?.orden}`
                 : 'Registrar regreso'}
             </Button>
+          </div>
+        )}
+
+        {/* ── Última carga de gasolina ── */}
+        {estado !== 'no_encontrado' && (
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 space-y-3 text-sm">
+            <p className="font-semibold text-gray-700">Última carga de gasolina</p>
+            {ultimaCarga ? (
+              <>
+                <p className="text-gray-500">{formatFecha(ultimaCarga.created_at)}</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="bg-green-50 rounded-xl px-3 py-2">
+                    <p className="text-gray-500">Litros</p>
+                    <p className="font-semibold text-green-700">{ultimaCarga.litros_cargados.toFixed(3)} L</p>
+                  </div>
+                  <div className="bg-green-50 rounded-xl px-3 py-2">
+                    <p className="text-gray-500">Total</p>
+                    <p className="font-semibold text-green-700">
+                      ${(ultimaCarga.litros_cargados * ultimaCarga.precio_litro).toFixed(2)}
+                    </p>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <p className="text-gray-400">Sin registros previos</p>
+            )}
+            <button
+              onClick={() => router.push(`/carga-gasolina?vehiculo=${codigo}`)}
+              className="w-full bg-green-600 text-white font-semibold rounded-xl px-4 py-3 hover:bg-green-700 active:bg-green-800 transition-colors"
+            >
+              Registrar carga de gasolina
+            </button>
           </div>
         )}
       </main>

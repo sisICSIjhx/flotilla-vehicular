@@ -69,22 +69,17 @@ export interface Recorrido {
   conductor_id: number
   centro_costo_id: number
 
-  // Configuración
   usa_paradas: boolean
 
-  // Salida
   fecha_salida: string
   km_salida: number
   combustible_salida: CombustibleNivel
   foto_salida_path: string
 
-  // Regreso (null hasta cerrar)
   fecha_regreso: string | null
   km_regreso: number | null
   combustible_regreso: CombustibleNivel | null
   foto_regreso_path: string | null
-  litros_cargados: number | null
-  precio_litro: number | null
 
   estado: RecorridoEstado
   created_at: string
@@ -97,15 +92,34 @@ export interface RecorridoParada {
   orden: number
   centro_costo_id: number
 
-  // Datos de la parada (null hasta completar)
   fecha_parada: string | null
   km_parada: number | null
   combustible_parada: CombustibleNivel | null
   foto_parada_path: string | null
-  litros_cargados: number | null
-  precio_litro: number | null
 
   estado: ParadaEstado
+  created_at: string
+  updated_at: string
+}
+
+export interface CargaGasolinaDB {
+  id: string
+  vehiculo_codigo: string
+  conductor_id: number
+  recorrido_id: string | null
+
+  km_antes: number
+  combustible_antes: number
+  foto_tablero_antes_path: string | null
+
+  km_despues: number
+  combustible_despues: number
+  litros_cargados: number
+  precio_litro: number
+  foto_tablero_despues_path: string | null
+  foto_ticket_path: string | null
+
+  observaciones: string | null
   created_at: string
   updated_at: string
 }
@@ -152,6 +166,12 @@ export type Database = {
         Row: RecorridoParada
         Insert: Omit<RecorridoParada, 'created_at' | 'updated_at'> & { id?: string }
         Update: Partial<Omit<RecorridoParada, 'id' | 'created_at' | 'updated_at'>>
+        Relationships: []
+      }
+      cargas_gasolina: {
+        Row: CargaGasolinaDB
+        Insert: Omit<CargaGasolinaDB, 'created_at' | 'updated_at'> & { id?: string }
+        Update: Partial<Omit<CargaGasolinaDB, 'id' | 'created_at' | 'updated_at'>>
         Relationships: []
       }
     }

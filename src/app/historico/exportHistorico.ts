@@ -2,15 +2,14 @@
 // La vista muestra máximo 50 registros; aquí se consulta TODO lo que
 // coincida con los filtros (paginado en lotes de 1000 por el límite de PostgREST).
 
-import { startOfWeek, startOfMonth, endOfMonth, subMonths } from 'date-fns'
 import { supabase } from '@/lib/supabase'
-import { calcKmRecorridos, calcImporte, calcLitrosConsumidos, calcRendimiento } from '@/lib/calculations'
+import { calcKmRecorridos, calcLitrosConsumidos, calcRendimiento } from '@/lib/calculations'
 import { formatFecha, formatMoneda, formatDecimal } from '@/utils/formatters'
 import { combustibleLabel } from '@/lib/constants'
 import { descargarCsv, type CeldaCsv } from '@/utils/export/csv'
 import { descargarXlsx, type HojaExcel, type CeldaExcel } from '@/utils/export/xlsx'
 import { ReportePdf, type FiltroAplicado } from '@/utils/export/pdf'
-import { periodoLabel, type CargaGasolina, type Periodo, type RecorridoHistorico } from './types'
+import { type CargaGasolina, type FuelMap, type RecorridoHistorico } from './types'
 
 const TAMANO_LOTE = 1000
 
@@ -24,39 +23,32 @@ const TAMANO_LOTE = 1000
  * para garantizar que la descarga coincida con lo filtrado en pantalla.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function aplicarFiltrosRecorridos(query: any, filtroVehiculo: string, filtroPeriodo: Periodo) {
+export function aplicarFiltrosRecorridos(query: any, filtroVehiculo: string, fechaInicio: string, fechaFin: string) {
   if (filtroVehiculo) {
     query = query.eq('vehiculo_codigo', filtroVehiculo)
   }
-  const now = new Date()
-  if (filtroPeriodo === 'semana') {
-    query = query.gte('fecha_salida', startOfWeek(now, { weekStartsOn: 1 }).toISOString())
-  } else if (filtroPeriodo === 'mes') {
-    query = query.gte('fecha_salida', startOfMonth(now).toISOString())
-  } else if (filtroPeriodo === 'mes_anterior') {
-    const prev = subMonths(now, 1)
-    query = query
-      .gte('fecha_salida', startOfMonth(prev).toISOString())
-      .lte('fecha_salida', endOfMonth(prev).toISOString())
-  }
+  query = query
+    .gte('fecha_salida', new Date(fechaInicio + 'T00:00:00').toISOString())
+    .lte('fecha_salida', new Date(fechaFin + 'T23:59:59').toISOString())
   return query
 }
 
 /** Cuenta los recorridos que coinciden con los filtros (para el guardrail de descargas grandes). */
-export async function contarRecorridos(filtroVehiculo: string, filtroPeriodo: Periodo): Promise<number> {
+export async function contarRecorridos(filtroVehiculo: string, fechaInicio: string, fechaFin: string): Promise<number> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let query = (supabase.from('recorridos') as any).select('id', { count: 'exact', head: true })
-  query = aplicarFiltrosRecorridos(query, filtroVehiculo, filtroPeriodo)
+  query = aplicarFiltrosRecorridos(query, filtroVehiculo, fechaInicio, fechaFin)
   const { count, error } = await query
   if (error) throw new Error(error.message)
   return count ?? 0
 }
 
-/** Trae TODOS los recorridos filtrados, paginando en lotes de 1000. */
+/** Trae TODOS los recorridos filtrados, paginando en lotes de 1000, más el FuelMap de cargas_gasolina. */
 export async function fetchRecorridosCompletos(
   filtroVehiculo: string,
-  filtroPeriodo: Periodo
-): Promise<RecorridoHistorico[]> {
+  fechaInicio: string,
+  fechaFin: string
+): Promise<{ registros: RecorridoHistorico[]; fuelMap: FuelMap }> {
   const todos: RecorridoHistorico[] = []
 
   for (let desde = 0; ; desde += TAMANO_LOTE) {
@@ -65,16 +57,16 @@ export async function fetchRecorridosCompletos(
       .select(`
         id, vehiculo_codigo, estado, usa_paradas, fecha_salida, fecha_regreso,
         km_salida, km_regreso, combustible_salida, combustible_regreso,
-        litros_cargados, precio_litro, foto_salida_path, foto_regreso_path,
+        foto_salida_path, foto_regreso_path,
         conductores(nombre),
         centros_costo(nombre),
         vehiculos(capacidad_tanque_litros, placa),
-        recorridos_paradas(id, orden, estado, fecha_parada, km_parada, combustible_parada, litros_cargados, precio_litro, foto_parada_path, centros_costo(nombre))
+        recorridos_paradas(id, orden, estado, fecha_parada, km_parada, combustible_parada, foto_parada_path, centros_costo(nombre))
       `)
       .order('fecha_salida', { ascending: false })
       .range(desde, desde + TAMANO_LOTE - 1)
 
-    query = aplicarFiltrosRecorridos(query, filtroVehiculo, filtroPeriodo)
+    query = aplicarFiltrosRecorridos(query, filtroVehiculo, fechaInicio, fechaFin)
 
     const { data, error } = await query
     if (error) throw new Error(error.message)
@@ -84,7 +76,28 @@ export async function fetchRecorridosCompletos(
     if (lote.length < TAMANO_LOTE) break
   }
 
-  return todos
+  // Batch fetch fuel sums from cargas_gasolina
+  const fuelMap: FuelMap = new Map()
+  if (todos.length > 0) {
+    try {
+      const ids = todos.map((r) => r.id)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: cargasData } = await (supabase.from('cargas_gasolina') as any)
+        .select('recorrido_id, litros_cargados, precio_litro')
+        .in('recorrido_id', ids)
+      for (const c of (cargasData ?? [])) {
+        const prev = fuelMap.get(c.recorrido_id) ?? { litros: 0, costo: 0 }
+        fuelMap.set(c.recorrido_id, {
+          litros: prev.litros + Number(c.litros_cargados),
+          costo: prev.costo + Number(c.litros_cargados) * Number(c.precio_litro),
+        })
+      }
+    } catch {
+      // tabla aún no existe — fuelMap stays empty
+    }
+  }
+
+  return { registros: todos, fuelMap }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -94,36 +107,31 @@ export async function fetchRecorridosCompletos(
 interface RecorridoCalculado {
   r: RecorridoHistorico
   kmRec: number | null
+  totalLitros: number
+  totalCosto: number
   litrosConsumidos: number | null
-  costo: number | null
   rendimiento: number | null
-  litrosParadas: number
-  costoParadas: number
 }
 
-function calcularRecorrido(r: RecorridoHistorico): RecorridoCalculado {
+function calcularRecorrido(r: RecorridoHistorico, fuelMap: FuelMap): RecorridoCalculado {
   const kmRec = r.km_regreso != null ? calcKmRecorridos(r.km_salida, r.km_regreso) : null
-  const costo =
-    r.litros_cargados && r.precio_litro ? calcImporte(r.litros_cargados, r.precio_litro) : null
-  const litrosParadas = r.recorridos_paradas.reduce((acc, p) => acc + (p.litros_cargados ?? 0), 0)
-  const costoParadas = r.recorridos_paradas.reduce(
-    (acc, p) => acc + (p.litros_cargados && p.precio_litro ? calcImporte(p.litros_cargados, p.precio_litro) : 0),
-    0
-  )
+  const fuelData = fuelMap.get(r.id)
+  const totalLitros = fuelData?.litros ?? 0
+  const totalCosto = fuelData?.costo ?? 0
   const litrosConsumidos =
     kmRec != null && r.combustible_regreso != null && r.vehiculos?.capacidad_tanque_litros
       ? calcLitrosConsumidos(
           r.vehiculos.capacidad_tanque_litros,
           r.combustible_salida,
           r.combustible_regreso,
-          (r.litros_cargados ?? 0) + litrosParadas
+          totalLitros
         )
       : null
   const rendimiento =
     kmRec != null && litrosConsumidos != null && litrosConsumidos > 0
       ? calcRendimiento(kmRec, litrosConsumidos)
       : null
-  return { r, kmRec, litrosConsumidos, costo, rendimiento, litrosParadas, costoParadas }
+  return { r, kmRec, totalLitros, totalCosto, litrosConsumidos, rendimiento }
 }
 
 function redondear(valor: number, decimales = 2): number {
@@ -139,13 +147,13 @@ const ENCABEZADOS_RECORRIDOS = [
   'Vehículo', 'Placa', 'Conductor', 'Centro de costo', 'Estado',
   'Fecha salida', 'Fecha regreso', 'KM salida', 'KM regreso', 'KM recorridos',
   'Combustible salida', 'Combustible regreso',
-  'Litros cargados', 'Litros consumidos', 'Precio por litro', 'Costo total',
-  'Rendimiento (km/L)', 'Paradas', 'Litros cargados en paradas', 'Costo cargas en paradas',
+  'Litros cargados (cargas ext.)', 'Litros consumidos', 'Costo total combustible',
+  'Rendimiento (km/L)', 'Paradas',
 ]
 
-function filasRecorridos(registros: RecorridoHistorico[]): CeldaCsv[][] {
+function filasRecorridos(registros: RecorridoHistorico[], fuelMap: FuelMap): CeldaCsv[][] {
   return registros.map((r) => {
-    const c = calcularRecorrido(r)
+    const c = calcularRecorrido(r, fuelMap)
     return [
       r.vehiculo_codigo,
       r.vehiculos?.placa ?? '',
@@ -159,14 +167,11 @@ function filasRecorridos(registros: RecorridoHistorico[]): CeldaCsv[][] {
       c.kmRec ?? '',
       combustibleLabel(r.combustible_salida),
       r.combustible_regreso != null ? combustibleLabel(r.combustible_regreso) : '',
-      r.litros_cargados != null ? redondear(r.litros_cargados, 3) : '',
+      c.totalLitros > 0 ? redondear(c.totalLitros, 3) : '',
       c.litrosConsumidos != null && c.litrosConsumidos > 0 ? redondear(c.litrosConsumidos, 3) : '',
-      r.precio_litro != null ? redondear(r.precio_litro, 3) : '',
-      c.costo != null ? redondear(c.costo) : '',
+      c.totalCosto > 0 ? redondear(c.totalCosto) : '',
       c.rendimiento != null ? redondear(c.rendimiento) : '',
       r.recorridos_paradas.length || '',
-      c.litrosParadas > 0 ? redondear(c.litrosParadas, 3) : '',
-      c.costoParadas > 0 ? redondear(c.costoParadas) : '',
     ]
   })
 }
@@ -181,19 +186,16 @@ interface TotalesRecorridos {
   rendimientoPromedio: number | null
 }
 
-function totalesRecorridos(registros: RecorridoHistorico[]): TotalesRecorridos {
-  const calculados = registros.map(calcularRecorrido)
+function totalesRecorridos(registros: RecorridoHistorico[], fuelMap: FuelMap): TotalesRecorridos {
+  const calculados = registros.map((r) => calcularRecorrido(r, fuelMap))
   const cerrados = calculados.filter((c) => c.r.estado === 'cerrado')
   const km = cerrados.reduce((acc, c) => acc + (c.kmRec ?? 0), 0)
-  const litrosCargados = cerrados.reduce(
-    (acc, c) => acc + (c.r.litros_cargados ?? 0) + c.litrosParadas,
-    0
-  )
+  const litrosCargados = cerrados.reduce((acc, c) => acc + c.totalLitros, 0)
   const litrosConsumidos = cerrados.reduce(
     (acc, c) => acc + (c.litrosConsumidos != null && c.litrosConsumidos > 0 ? c.litrosConsumidos : 0),
     0
   )
-  const costo = cerrados.reduce((acc, c) => acc + (c.costo ?? 0) + c.costoParadas, 0)
+  const costo = cerrados.reduce((acc, c) => acc + c.totalCosto, 0)
   return {
     total: registros.length,
     cerrados: cerrados.length,
@@ -205,51 +207,12 @@ function totalesRecorridos(registros: RecorridoHistorico[]): TotalesRecorridos {
   }
 }
 
-/** Deriva las cargas de gasolina (regreso final + paradas) de los recorridos. */
-function cargasDesdeRecorridos(registros: RecorridoHistorico[]): CeldaCsv[][] {
-  const filas: CeldaCsv[][] = []
-  for (const r of registros) {
-    if (r.litros_cargados && r.precio_litro && r.fecha_regreso && r.km_regreso != null) {
-      filas.push([
-        r.conductores?.nombre ?? '',
-        r.vehiculo_codigo,
-        r.vehiculos?.placa ?? '',
-        'Regreso final',
-        formatFecha(r.fecha_regreso),
-        r.km_regreso,
-        redondear(r.litros_cargados, 3),
-        redondear(r.precio_litro, 3),
-        redondear(calcImporte(r.litros_cargados, r.precio_litro)),
-      ])
-    }
-    for (const p of r.recorridos_paradas) {
-      if (p.litros_cargados && p.precio_litro && p.fecha_parada && p.km_parada != null) {
-        filas.push([
-          r.conductores?.nombre ?? '',
-          r.vehiculo_codigo,
-          r.vehiculos?.placa ?? '',
-          'Parada intermedia',
-          formatFecha(p.fecha_parada),
-          p.km_parada,
-          redondear(p.litros_cargados, 3),
-          redondear(p.precio_litro, 3),
-          redondear(calcImporte(p.litros_cargados, p.precio_litro)),
-        ])
-      }
-    }
-  }
-  return filas
-}
-
-const ENCABEZADOS_CARGAS_DERIVADAS = [
-  'Conductor', 'Vehículo', 'Placa', 'Tipo de carga', 'Fecha carga',
-  'KM carga', 'Litros cargados', 'Precio por litro', 'Costo total',
-]
-
-function filtrosRecorridos(filtroVehiculo: string, filtroPeriodo: Periodo): FiltroAplicado[] {
+function filtrosRecorridos(filtroVehiculo: string, filtroConductor: string, fechaInicio: string, fechaFin: string): FiltroAplicado[] {
   return [
+    { etiqueta: 'Desde', valor: fechaInicio },
+    { etiqueta: 'Hasta', valor: fechaFin },
     { etiqueta: 'Vehículo', valor: filtroVehiculo || 'Todos' },
-    { etiqueta: 'Período', valor: periodoLabel(filtroPeriodo) },
+    { etiqueta: 'Conductor', valor: filtroConductor || 'Todos' },
   ]
 }
 
@@ -257,22 +220,17 @@ function filtrosRecorridos(filtroVehiculo: string, filtroPeriodo: Periodo): Filt
 // Exportadores: Recorridos
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function exportarRecorridosCsv(registros: RecorridoHistorico[]) {
-  descargarCsv('historico_recorridos', ENCABEZADOS_RECORRIDOS, filasRecorridos(registros))
+export function exportarRecorridosCsv(registros: RecorridoHistorico[], fuelMap: FuelMap) {
+  descargarCsv('historico_recorridos', ENCABEZADOS_RECORRIDOS, filasRecorridos(registros, fuelMap))
 }
 
-export function exportarRecorridosXlsx(registros: RecorridoHistorico[]) {
-  const t = totalesRecorridos(registros)
+export function exportarRecorridosXlsx(registros: RecorridoHistorico[], fuelMap: FuelMap) {
+  const t = totalesRecorridos(registros, fuelMap)
   const hojas: HojaExcel[] = [
     {
       nombre: 'Recorridos',
       encabezados: ENCABEZADOS_RECORRIDOS,
-      filas: filasRecorridos(registros) as CeldaExcel[][],
-    },
-    {
-      nombre: 'Cargas gasolina',
-      encabezados: ENCABEZADOS_CARGAS_DERIVADAS,
-      filas: cargasDesdeRecorridos(registros) as CeldaExcel[][],
+      filas: filasRecorridos(registros, fuelMap) as CeldaExcel[][],
     },
     {
       nombre: 'Resumen',
@@ -281,12 +239,12 @@ export function exportarRecorridosXlsx(registros: RecorridoHistorico[]) {
         ['Recorridos totales', t.total],
         ['Recorridos cerrados', t.cerrados],
         ['KM recorridos', t.km],
-        ['Litros cargados (incluye paradas)', redondear(t.litrosCargados, 3)],
+        ['Litros cargados (cargas externas)', redondear(t.litrosCargados, 3)],
         ['Litros consumidos', redondear(t.litrosConsumidos, 3)],
         ['Costo total combustible', redondear(t.costo)],
         ['Rendimiento promedio (km/L)', t.rendimientoPromedio != null ? redondear(t.rendimientoPromedio) : '—'],
       ],
-      anchos: [34, 16],
+      anchos: [36, 16],
     },
   ]
   descargarXlsx('historico_recorridos', hojas)
@@ -294,13 +252,16 @@ export function exportarRecorridosXlsx(registros: RecorridoHistorico[]) {
 
 export function exportarRecorridosPdf(
   registros: RecorridoHistorico[],
+  fuelMap: FuelMap,
   filtroVehiculo: string,
-  filtroPeriodo: Periodo
+  filtroConductor: string,
+  fechaInicio: string,
+  fechaFin: string
 ) {
-  const t = totalesRecorridos(registros)
+  const t = totalesRecorridos(registros, fuelMap)
   const reporte = new ReportePdf('Reporte de recorridos', 'landscape')
 
-  reporte.agregarFiltros(filtrosRecorridos(filtroVehiculo, filtroPeriodo))
+  reporte.agregarFiltros(filtrosRecorridos(filtroVehiculo, filtroConductor, fechaInicio, fechaFin))
   reporte.agregarTarjetas([
     { etiqueta: 'Recorridos', valor: String(t.total) },
     { etiqueta: 'KM totales', valor: t.km.toLocaleString() },
@@ -317,7 +278,7 @@ export function exportarRecorridosPdf(
     ['Vehículo', 'Placa', 'Conductor', 'Centro de costo', 'Salida', 'Regreso',
       'KM rec.', 'L. carg.', 'L. cons.', 'Costo', 'Rend.', 'Estado'],
     registros.map((r) => {
-      const c = calcularRecorrido(r)
+      const c = calcularRecorrido(r, fuelMap)
       return [
         r.vehiculo_codigo,
         r.vehiculos?.placa ?? '—',
@@ -326,9 +287,9 @@ export function exportarRecorridosPdf(
         formatFecha(r.fecha_salida),
         r.fecha_regreso ? formatFecha(r.fecha_regreso) : '—',
         c.kmRec != null ? c.kmRec.toLocaleString() : '—',
-        r.litros_cargados != null ? formatDecimal(r.litros_cargados) : '—',
+        c.totalLitros > 0 ? formatDecimal(c.totalLitros) : '—',
         c.litrosConsumidos != null && c.litrosConsumidos > 0 ? formatDecimal(c.litrosConsumidos) : '—',
-        c.costo != null ? formatMoneda(c.costo) : '—',
+        c.totalCosto > 0 ? formatMoneda(c.totalCosto) : '—',
         c.rendimiento != null ? `${formatDecimal(c.rendimiento, 2)}` : '—',
         r.estado === 'cerrado' ? 'Cerrado' : 'En ruta',
       ]
@@ -350,7 +311,7 @@ export function exportarRecorridosPdf(
   reporte.agregarNota(
     'L. cons. = balance real del tanque (nivel inicial + recargas − nivel final). ' +
     'Rendimiento en km/L. Los totales consideran solo recorridos cerrados. ' +
-    'Las fotos de tablero están disponibles en la aplicación.'
+    'L. carg. = litros registrados en módulo Cargas de Gasolina para este recorrido.'
   )
   reporte.guardar('historico_recorridos')
 }
@@ -360,25 +321,29 @@ export function exportarRecorridosPdf(
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ENCABEZADOS_CARGAS = [
-  'Conductor', 'Vehículo', 'Placa', 'Modelo', 'Tipo de carga', 'Fecha carga',
-  'KM carga', 'Litros cargados', 'Precio por litro', 'Costo total',
-  'Fecha siguiente carga', 'KM siguiente carga',
+  'Fecha', 'Vehículo', 'Placa', 'Conductor',
+  'KM antes', 'KM después',
+  'Nivel antes', 'Nivel después',
+  'Litros cargados', 'Precio por litro', 'Costo total',
+  'Tipo', 'Destino/Recorrido', 'Observaciones',
 ]
 
 function filasCargas(cargas: CargaGasolina[]): CeldaCsv[][] {
   return cargas.map((c) => [
-    c.conductor,
+    formatFecha(c.fecha_carga),
     c.vehiculo_codigo,
     c.placa ?? '',
-    c.modelo ?? '',
-    c.tipo_carga === 'regreso_final' ? 'Regreso final' : 'Parada intermedia',
-    formatFecha(c.fecha_carga),
-    c.km_carga,
+    c.conductor,
+    c.km_antes,
+    c.km_despues,
+    combustibleLabel(c.combustible_antes),
+    combustibleLabel(c.combustible_despues),
     redondear(c.litros_cargados, 3),
     redondear(c.precio_litro, 3),
     redondear(c.costo_total),
-    c.fecha_siguiente_carga ? formatFecha(c.fecha_siguiente_carga) : '',
-    c.km_siguiente_carga ?? '',
+    c.recorrido_id ? 'En recorrido' : 'Fuera de recorrido',
+    c.destino ?? '',
+    c.observaciones ?? '',
   ])
 }
 
@@ -450,25 +415,27 @@ export function exportarCargasPdf(cargas: CargaGasolina[], filtros: FiltrosCarga
 
   reporte.agregarSeccion('Detalle de cargas')
   reporte.agregarTabla(
-    ['Conductor', 'Vehículo', 'Placa', 'Tipo', 'Fecha carga', 'KM carga', 'Litros', '$/L', 'Costo total'],
+    ['Fecha', 'Vehículo', 'Conductor', 'KM antes', 'KM después', 'Litros', '$/L', 'Costo total', 'Tipo'],
     cargas.map((c) => [
-      c.conductor,
-      c.vehiculo_codigo,
-      c.placa ?? '—',
-      c.tipo_carga === 'regreso_final' ? 'Regreso final' : 'Parada intermedia',
       formatFecha(c.fecha_carga),
-      c.km_carga.toLocaleString(),
+      c.vehiculo_codigo,
+      c.conductor,
+      c.km_antes.toLocaleString(),
+      c.km_despues.toLocaleString(),
       formatDecimal(c.litros_cargados),
       `$${c.precio_litro.toFixed(3)}`,
       formatMoneda(c.costo_total),
+      c.recorrido_id ? 'En recorrido' : 'Fuera de recorrido',
     ]),
     {
-      columnasDerecha: [5, 6, 7, 8],
+      columnasDerecha: [3, 4, 5, 6, 7],
       filaTotales: [
-        'Totales', '', '', '', '', '',
+        'Totales', '', '',
+        '', '',
         formatDecimal(totalLitros),
         totalLitros > 0 ? `$${(totalCosto / totalLitros).toFixed(3)} prom.` : '—',
         formatMoneda(totalCosto),
+        '',
       ],
     }
   )

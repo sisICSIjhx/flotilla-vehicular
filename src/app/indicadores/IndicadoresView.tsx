@@ -18,7 +18,7 @@ import {
 } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { supabase } from '@/lib/supabase'
-import { calcKmRecorridos, calcImporte, calcLitrosConsumidos, calcRendimiento } from '@/lib/calculations'
+import { calcKmRecorridos, calcLitrosConsumidos, calcRendimiento } from '@/lib/calculations'
 import { formatMoneda, formatDecimal } from '@/utils/formatters'
 import Loading from '@/components/common/Loading'
 import ErrorMessage from '@/components/common/ErrorMessage'
@@ -39,27 +39,24 @@ import {
 } from './exportIndicadores'
 
 interface RecorridoCerrado {
+  id: string
   vehiculo_codigo: string
   fecha_salida: string
   km_salida: number
   km_regreso: number
   combustible_salida: number
   combustible_regreso: number
-  litros_cargados: number | null
-  precio_litro: number | null
   vehiculos: { capacidad_tanque_litros: number; apodo: string | null } | null
-  recorridos_paradas: { litros_cargados: number | null; precio_litro: number | null }[]
 }
 
-function recTotalLitros(r: RecorridoCerrado): number {
-  return (r.litros_cargados ?? 0) + r.recorridos_paradas.reduce((acc, p) => acc + (p.litros_cargados ?? 0), 0)
+type FuelMap = Map<string, { litros: number; costo: number }>
+
+function recTotalLitros(id: string, fuelMap: FuelMap): number {
+  return fuelMap.get(id)?.litros ?? 0
 }
 
-function recTotalCosto(r: RecorridoCerrado): number {
-  const reg = r.litros_cargados && r.precio_litro ? calcImporte(r.litros_cargados, r.precio_litro) : 0
-  return reg + r.recorridos_paradas.reduce(
-    (acc, p) => acc + (p.litros_cargados && p.precio_litro ? calcImporte(p.litros_cargados, p.precio_litro) : 0), 0
-  )
+function recTotalCosto(id: string, fuelMap: FuelMap): number {
+  return fuelMap.get(id)?.costo ?? 0
 }
 
 interface StatCard {
@@ -84,6 +81,7 @@ export default function IndicadoresView() {
   const [vehiculos, setVehiculos] = useState<{ codigo: string; apodo: string | null; placa: string | null }[]>([])
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [cargasFuelData, setCargasFuelData] = useState<FuelMap>(new Map())
 
   // Filtro de período
   const [tipo, setTipo] = useState<TipoFiltro>('mes')
@@ -147,13 +145,39 @@ export default function IndicadoresView() {
       const { desde, hasta } = calcularRango()
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data, error: qError } = await (supabase.from('recorridos') as any)
-        .select('vehiculo_codigo, fecha_salida, km_salida, km_regreso, combustible_salida, combustible_regreso, litros_cargados, precio_litro, vehiculos(capacidad_tanque_litros, apodo), recorridos_paradas(litros_cargados, precio_litro)')
+        .select('id, vehiculo_codigo, fecha_salida, km_salida, km_regreso, combustible_salida, combustible_regreso, vehiculos(capacidad_tanque_litros, apodo)')
         .eq('estado', 'cerrado')
         .gte('fecha_salida', desde)
         .lte('fecha_salida', hasta)
         .order('fecha_salida', { ascending: true })
       if (qError) throw new Error(qError.message)
-      setDatos((data ?? []) as RecorridoCerrado[])
+      const rows = (data ?? []) as RecorridoCerrado[]
+      setDatos(rows)
+
+      // Batch fetch fuel sums from cargas_gasolina
+      if (rows.length > 0) {
+        try {
+          const ids = rows.map((r) => r.id)
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: cargasData } = await (supabase.from('cargas_gasolina') as any)
+            .select('recorrido_id, litros_cargados, precio_litro')
+            .in('recorrido_id', ids)
+
+          const fuelMap: FuelMap = new Map()
+          for (const c of (cargasData ?? [])) {
+            const prev = fuelMap.get(c.recorrido_id) ?? { litros: 0, costo: 0 }
+            fuelMap.set(c.recorrido_id, {
+              litros: prev.litros + Number(c.litros_cargados),
+              costo: prev.costo + Number(c.litros_cargados) * Number(c.precio_litro),
+            })
+          }
+          setCargasFuelData(fuelMap)
+        } catch {
+          setCargasFuelData(new Map())
+        }
+      } else {
+        setCargasFuelData(new Map())
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error al cargar indicadores')
     } finally {
@@ -185,7 +209,7 @@ export default function IndicadoresView() {
 
   // ── Cálculos globales ──────────────────────────────────────────────────────
   const totalKm = datosFiltrados.reduce((acc, r) => acc + calcKmRecorridos(r.km_salida, r.km_regreso), 0)
-  const totalCosto = datosFiltrados.reduce((acc, r) => acc + recTotalCosto(r), 0)
+  const totalCosto = datosFiltrados.reduce((acc, r) => acc + recTotalCosto(r.id, cargasFuelData), 0)
   // Litros consumidos = balance real del tanque, NO solo recargas
   const totalLitrosConsumidos = datosFiltrados.reduce((acc, r) => {
     if (!r.vehiculos?.capacidad_tanque_litros) return acc
@@ -193,7 +217,7 @@ export default function IndicadoresView() {
       r.vehiculos.capacidad_tanque_litros,
       r.combustible_salida,
       r.combustible_regreso,
-      recTotalLitros(r)
+      recTotalLitros(r.id, cargasFuelData)
     )
     return l > 0 ? acc + l : acc
   }, 0)
@@ -229,7 +253,7 @@ export default function IndicadoresView() {
 
   // ── Costo por vehículo ─────────────────────────────────────────────────────
   const costoPorVehiculo = datosFiltrados.reduce<Record<string, number>>((acc, r) => {
-    acc[r.vehiculo_codigo] = (acc[r.vehiculo_codigo] ?? 0) + recTotalCosto(r)
+    acc[r.vehiculo_codigo] = (acc[r.vehiculo_codigo] ?? 0) + recTotalCosto(r.id, cargasFuelData)
     return acc
   }, {})
   const vehiculosCostoOrdenados = Object.entries(costoPorVehiculo).sort((a, b) => b[1] - a[1])
@@ -241,7 +265,7 @@ export default function IndicadoresView() {
       r.vehiculos.capacidad_tanque_litros,
       r.combustible_salida,
       r.combustible_regreso,
-      recTotalLitros(r)
+      recTotalLitros(r.id, cargasFuelData)
     )
     if (litrosConsumidos <= 0) return acc
     const key = keyPeriodo(r.fecha_salida)
@@ -258,7 +282,7 @@ export default function IndicadoresView() {
 
   // ── Litros recargados por período ──────────────────────────────────────────
   const litrosRecPorPeriodo = datosFiltrados.reduce<Record<string, number>>((acc, r) => {
-    const total = recTotalLitros(r)
+    const total = recTotalLitros(r.id, cargasFuelData)
     if (!total) return acc
     const key = keyPeriodo(r.fecha_salida)
     acc[key] = (acc[key] ?? 0) + total
@@ -274,7 +298,7 @@ export default function IndicadoresView() {
     const apodo = apodoMap[vehiculo] ?? datos.find((r) => r.vehiculo_codigo === vehiculo)?.vehiculos?.apodo ?? null
     const litrosCargados = datosFiltrados
       .filter((r) => r.vehiculo_codigo === vehiculo)
-      .reduce((acc, r) => acc + recTotalLitros(r), 0)
+      .reduce((acc, r) => acc + recTotalLitros(r.id, cargasFuelData), 0)
     const litrosConsumidos = datosFiltrados
       .filter((r) => r.vehiculo_codigo === vehiculo && r.vehiculos?.capacidad_tanque_litros)
       .reduce((acc, r) => {
@@ -282,7 +306,7 @@ export default function IndicadoresView() {
           r.vehiculos!.capacidad_tanque_litros,
           r.combustible_salida,
           r.combustible_regreso,
-          recTotalLitros(r)
+          recTotalLitros(r.id, cargasFuelData)
         )
         return l > 0 ? acc + l : acc
       }, 0)

@@ -16,8 +16,6 @@ interface Errores {
   km_parada?: string
   combustible?: string
   foto?: string
-  litros?: string
-  precio?: string
 }
 
 export default function FormParada() {
@@ -39,8 +37,6 @@ export default function FormParada() {
   const [kmParada, setKmParada] = useState('')
   const [combustible, setCombustible] = useState<number | null>(null)
   const [foto, setFoto] = useState<File | null>(null)
-  const [litros, setLitros] = useState('')
-  const [precio, setPrecio] = useState('')
 
   const [errores, setErrores] = useState<Errores>({})
   const [enviando, setEnviando] = useState(false)
@@ -115,8 +111,6 @@ export default function FormParada() {
     }
     if (combustible === null) errs.combustible = 'Selecciona el nivel de combustible'
     if (!foto) errs.foto = 'La foto del tablero es obligatoria'
-    if (litros && Number(litros) < 0) errs.litros = 'Ingresa un valor válido'
-    if (precio && Number(precio) < 0) errs.precio = 'Ingresa un valor válido'
 
     setErrores(errs)
     return Object.keys(errs).length === 0
@@ -142,8 +136,6 @@ export default function FormParada() {
           km_parada: Number(kmParada),
           combustible_parada: combustible as number,
           foto_parada_path: fotoPath,
-          litros_cargados: litros ? Number(litros) : null,
-          precio_litro: precio ? Number(precio) : null,
           estado: 'completada',
           fecha_parada: new Date().toISOString(),
         })
@@ -235,39 +227,6 @@ export default function FormParada() {
           onPhoto={setFoto}
           error={errores.foto}
         />
-
-        {/* Carga de combustible (opcional) */}
-        <div className="bg-gray-50 rounded-2xl border border-gray-200 p-4 space-y-4">
-          <p className="text-sm font-medium text-gray-700">Carga de combustible en esta parada (opcional)</p>
-          <Input
-            label="Litros cargados"
-            type="number"
-            min={0}
-            step="0.001"
-            value={litros}
-            onChange={(e) => setLitros(e.target.value)}
-            placeholder="Ej: 35.500"
-            inputMode="decimal"
-            error={errores.litros}
-          />
-          <Input
-            label="Precio por litro ($)"
-            type="number"
-            min={0}
-            step="0.001"
-            value={precio}
-            onChange={(e) => setPrecio(e.target.value)}
-            placeholder="Ej: 23.500"
-            inputMode="decimal"
-            error={errores.precio}
-          />
-          {litros && precio && (
-            <p className="text-sm text-blue-700 bg-blue-50 rounded-xl px-3 py-2">
-              Importe estimado:{' '}
-              <strong>${(Number(litros) * Number(precio)).toFixed(3)}</strong>
-            </p>
-          )}
-        </div>
 
         <div className="pt-2 pb-8">
           <Button type="submit" loading={enviando}>
