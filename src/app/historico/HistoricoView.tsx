@@ -173,26 +173,24 @@ export default function HistoricoView() {
       ].sort((a, b) => a.codigo.localeCompare(b.codigo))
       setVehiculos(unicos)
 
-      // Batch fetch fuel sums from cargas_gasolina
+      // Batch fetch fuel sums via RPC (incluye cargas con recorrido_id directo
+      // y cargas sin recorrido_id asociadas por rango km+fecha)
       if (rows.length > 0) {
         try {
           const ids = rows.map((r) => r.id)
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const { data: cargasData } = await (supabase.from('cargas_gasolina') as any)
-            .select('recorrido_id, litros_cargados, precio_litro')
-            .in('recorrido_id', ids)
+          const { data: cargasData } = await (supabase as any)
+            .rpc('get_fuel_por_recorridos', { p_recorrido_ids: ids })
 
           const fuelMap: FuelMap = new Map()
           for (const c of (cargasData ?? [])) {
-            const prev = fuelMap.get(c.recorrido_id) ?? { litros: 0, costo: 0 }
             fuelMap.set(c.recorrido_id, {
-              litros: prev.litros + Number(c.litros_cargados),
-              costo: prev.costo + Number(c.litros_cargados) * Number(c.precio_litro),
+              litros: Number(c.litros),
+              costo: Number(c.costo),
             })
           }
           setCargasPorRecorrido(fuelMap)
         } catch {
-          // tabla aún no existe — sin datos de combustible
           setCargasPorRecorrido(new Map())
         }
       }
@@ -216,7 +214,7 @@ export default function HistoricoView() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let query = (supabase.from('cargas_gasolina') as any)
         .select(`
-          id, vehiculo_codigo, recorrido_id, km_antes, km_despues,
+          id, vehiculo_codigo, recorrido_id, km_antes,
           combustible_antes, combustible_despues,
           litros_cargados, precio_litro,
           foto_tablero_antes_path, foto_tablero_despues_path, foto_ticket_path,
@@ -247,7 +245,6 @@ export default function HistoricoView() {
         recorrido_id: c.recorrido_id,
         destino: c.recorridos?.centros_costo?.nombre ?? null,
         km_antes: c.km_antes,
-        km_despues: c.km_despues,
         combustible_antes: c.combustible_antes,
         combustible_despues: c.combustible_despues,
         litros_cargados: Number(c.litros_cargados),
@@ -269,7 +266,7 @@ export default function HistoricoView() {
         return {
           ...item,
           fecha_siguiente_carga: tieneSiguiente ? next.fecha_carga : null,
-          km_siguiente_carga: tieneSiguiente ? next.km_despues : null,
+          km_siguiente_carga: tieneSiguiente ? next.km_antes : null,
         }
       })
 
@@ -928,8 +925,7 @@ export default function HistoricoView() {
                         <th className="px-3 py-3 text-center">Vehículo</th>
                         <th className="px-3 py-3 text-center">Modelo</th>
                         <th className="px-3 py-3 text-center">Fecha carga</th>
-                        <th className="px-3 py-3 text-center">KM antes</th>
-                        <th className="px-3 py-3 text-center">KM después</th>
+                        <th className="px-3 py-3 text-center">KM</th>
                         <th className="px-3 py-3 text-center">Nivel antes</th>
                         <th className="px-3 py-3 text-center">Nivel después</th>
                         <th className="px-3 py-3 text-center">Litros</th>
@@ -957,9 +953,6 @@ export default function HistoricoView() {
                           </td>
                           <td className="px-3 py-3 text-right whitespace-nowrap text-gray-600">
                             {c.km_antes.toLocaleString()}
-                          </td>
-                          <td className="px-3 py-3 text-right whitespace-nowrap text-gray-600">
-                            {c.km_despues.toLocaleString()}
                           </td>
                           <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-600">
                             {combustibleLabel(c.combustible_antes)}

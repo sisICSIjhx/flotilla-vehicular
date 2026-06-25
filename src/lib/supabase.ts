@@ -112,7 +112,6 @@ export interface CargaGasolinaDB {
   combustible_antes: number
   foto_tablero_antes_path: string | null
 
-  km_despues: number
   combustible_despues: number
   litros_cargados: number
   precio_litro: number

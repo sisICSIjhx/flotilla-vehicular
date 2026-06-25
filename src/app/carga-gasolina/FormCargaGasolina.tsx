@@ -121,7 +121,7 @@ export default function FormCargaGasolina() {
     if (conductorMode === 'manual' && !conductorNombre.trim()) return false
 
     const kmA = Number(kmAntes)
-    if (!kmAntes || kmA < 0 || kmA < kmBase) return false
+    if (!kmAntes || kmA < 0) return false
 
     if (combustibleAntes === null) return false
     if (!fotoAntes) return false
@@ -147,8 +147,6 @@ export default function FormCargaGasolina() {
     const kmA = Number(kmAntes)
     if (!kmAntes || kmA < 0) {
       errs.km_antes = 'Ingresa los KM del odómetro antes de cargar'
-    } else if (kmA < kmBase) {
-      errs.km_antes = `Debe ser mayor o igual al KM del vehículo (${kmBase.toLocaleString()})`
     }
 
     if (combustibleAntes === null) errs.combustible_antes = 'Selecciona el nivel antes de cargar'
@@ -216,7 +214,6 @@ export default function FormCargaGasolina() {
         km_antes: kmA,
         combustible_antes: combustibleAntes as number,
         foto_tablero_antes_path: pathAntes,
-        km_despues: kmA,
         combustible_despues: combustibleDespues as number,
         litros_cargados: Number(litros),
         precio_litro: Number(precio),
@@ -321,13 +318,18 @@ export default function FormCargaGasolina() {
           <Input
             label="KM del odómetro"
             type="number"
-            min={kmBase}
+            min={0}
             value={kmAntes}
             onChange={(e) => setKmAntes(e.target.value)}
-            placeholder={`Mín: ${kmBase.toLocaleString()}`}
+            placeholder={`Ej: ${kmBase.toLocaleString()}`}
             inputMode="numeric"
             error={errores.km_antes}
           />
+          {kmAntes && Number(kmAntes) > 0 && Number(kmAntes) < kmBase && (
+            <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              El KM ingresado es menor al registrado en el sistema ({kmBase.toLocaleString()}). Se guardará como carga retroactiva.
+            </p>
+          )}
 
           <FuelGauge
             label="Nivel de combustible (antes)"

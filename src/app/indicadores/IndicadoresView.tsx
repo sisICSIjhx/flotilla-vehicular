@@ -13,6 +13,8 @@ import {
   subDays,
   subWeeks,
   subMonths,
+  addDays,
+  getDate,
   format,
   parseISO,
 } from 'date-fns'
@@ -25,8 +27,12 @@ import ErrorMessage from '@/components/common/ErrorMessage'
 import ExportButtons from '@/components/common/ExportButtons'
 import {
   buildDatasets,
+  buildDatasetsStacked,
+  buildDatasetsStackedConTendencia,
+  stackedTotalPlugin,
   chartOptions,
   chartOptionsConLeyenda,
+  chartOptionsStacked,
   type TipoFiltro,
   type TipoGrafica,
 } from './chartConfig'
@@ -117,7 +123,7 @@ export default function IndicadoresView() {
     switch (tipo) {
       case 'dia': {
         const d = parseISO(fechaDia)
-        return { desde: startOfDay(d).toISOString(), hasta: endOfDay(d).toISOString() }
+        return { desde: startOfDay(subDays(d, 1)).toISOString(), hasta: endOfDay(addDays(d, 1)).toISOString() }
       }
       case 'semana': {
         const lunes = parseISO(semanaRef)
@@ -154,21 +160,20 @@ export default function IndicadoresView() {
       const rows = (data ?? []) as RecorridoCerrado[]
       setDatos(rows)
 
-      // Batch fetch fuel sums from cargas_gasolina
+      // Batch fetch fuel sums via RPC (incluye cargas con recorrido_id directo
+      // y cargas sin recorrido_id asociadas por rango km+fecha)
       if (rows.length > 0) {
         try {
           const ids = rows.map((r) => r.id)
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const { data: cargasData } = await (supabase.from('cargas_gasolina') as any)
-            .select('recorrido_id, litros_cargados, precio_litro')
-            .in('recorrido_id', ids)
+          const { data: cargasData } = await (supabase as any)
+            .rpc('get_fuel_por_recorridos', { p_recorrido_ids: ids })
 
           const fuelMap: FuelMap = new Map()
           for (const c of (cargasData ?? [])) {
-            const prev = fuelMap.get(c.recorrido_id) ?? { litros: 0, costo: 0 }
             fuelMap.set(c.recorrido_id, {
-              litros: prev.litros + Number(c.litros_cargados),
-              costo: prev.costo + Number(c.litros_cargados) * Number(c.precio_litro),
+              litros: Number(c.litros),
+              costo: Number(c.costo),
             })
           }
           setCargasFuelData(fuelMap)
@@ -232,10 +237,48 @@ export default function IndicadoresView() {
 
   // ── Agrupación temporal ────────────────────────────────────────────────────
   const esPorDia = tipo === 'dia' || tipo === 'semana'
-  const keyPeriodo = (fecha: string) =>
-    esPorDia
-      ? format(new Date(fecha), 'dd MMM', { locale: es })
-      : format(new Date(fecha), 'MMM yyyy', { locale: es })
+  const unidadTemporal = tipo === 'mes' ? 'semana' : esPorDia ? 'día' : 'mes'
+
+  const keyPeriodo = (fecha: string) => {
+    if (tipo === 'dia' || tipo === 'semana') {
+      return format(new Date(fecha), 'dd MMM', { locale: es })
+    }
+    if (tipo === 'mes') {
+      const day = getDate(new Date(fecha))
+      if (day <= 7) return 'Sem 1'
+      if (day <= 14) return 'Sem 2'
+      if (day <= 21) return 'Sem 3'
+      return 'Sem 4'
+    }
+    return format(new Date(fecha), 'MMM yyyy', { locale: es })
+  }
+
+  // Labels ordenados completos (incluye períodos sin datos, valor 0)
+  const periodLabels: string[] | null = (() => {
+    if (tipo === 'dia') {
+      const d = parseISO(fechaDia)
+      return [
+        format(subDays(d, 1), 'dd MMM', { locale: es }),
+        format(d, 'dd MMM', { locale: es }),
+        format(addDays(d, 1), 'dd MMM', { locale: es }),
+      ]
+    }
+    if (tipo === 'semana') {
+      const lunes = parseISO(semanaRef)
+      return Array.from({ length: 7 }, (_, i) => format(addDays(lunes, i), 'dd MMM', { locale: es }))
+    }
+    if (tipo === 'mes') {
+      return ['Sem 1', 'Sem 2', 'Sem 3', 'Sem 4']
+    }
+    return null
+  })()
+
+  function toOrderedChart(map: Record<string, number>): { labels: string[]; values: number[] } {
+    if (periodLabels) {
+      return { labels: periodLabels, values: periodLabels.map((k) => map[k] ?? 0) }
+    }
+    return { labels: Object.keys(map), values: Object.values(map) }
+  }
 
   // ── KM por vehículo ────────────────────────────────────────────────────────
   const kmPorVehiculo = datosFiltrados.reduce<Record<string, number>>((acc, r) => {
@@ -257,6 +300,32 @@ export default function IndicadoresView() {
     return acc
   }, {})
   const vehiculosCostoOrdenados = Object.entries(costoPorVehiculo).sort((a, b) => b[1] - a[1])
+
+  // ── Desglose vehicle × período (para gráficas apiladas) ────────────────────
+  const kmPorVehiculoPeriodo = datosFiltrados.reduce<Record<string, Record<string, number>>>((acc, r) => {
+    const p = keyPeriodo(r.fecha_salida)
+    if (!acc[r.vehiculo_codigo]) acc[r.vehiculo_codigo] = {}
+    acc[r.vehiculo_codigo][p] = (acc[r.vehiculo_codigo][p] ?? 0) + calcKmRecorridos(r.km_salida, r.km_regreso)
+    return acc
+  }, {})
+
+  const costoPorVehiculoPeriodo = datosFiltrados.reduce<Record<string, Record<string, number>>>((acc, r) => {
+    const p = keyPeriodo(r.fecha_salida)
+    if (!acc[r.vehiculo_codigo]) acc[r.vehiculo_codigo] = {}
+    acc[r.vehiculo_codigo][p] = (acc[r.vehiculo_codigo][p] ?? 0) + recTotalCosto(r.id, cargasFuelData)
+    return acc
+  }, {})
+
+  // Keys de período en orden (para datasets apilados)
+  const allPeriodKeys: string[] = periodLabels ?? (() => {
+    const seen = new Set<string>()
+    const ordered: string[] = []
+    for (const r of datosFiltrados) {
+      const k = keyPeriodo(r.fecha_salida)
+      if (!seen.has(k)) { seen.add(k); ordered.push(k) }
+    }
+    return ordered
+  })()
 
   // ── Rendimiento por período ────────────────────────────────────────────────
   const rendAcum = datosFiltrados.reduce<Record<string, { km: number; litros: number }>>((acc, r) => {
@@ -291,7 +360,19 @@ export default function IndicadoresView() {
   const hayDatosLitrosRec = Object.keys(litrosRecPorPeriodo).length > 0
 
   // ── Labels ─────────────────────────────────────────────────────────────────
-  const labelPeriodo = esPorDia ? 'KM por día' : 'KM por mes'
+  const labelPeriodo = tipo === 'mes' ? 'KM por semana' : esPorDia ? 'KM por día' : 'KM por mes'
+
+  // ── Datos ordenados para gráficas por período ──────────────────────────────
+  const kmPeriodoOrdenado = toOrderedChart(kmPorPeriodo)
+  const rendPeriodoOrdenado = toOrderedChart(
+    Object.fromEntries(rendLabels.map((k, i) => [k, rendValues[i]]))
+  )
+  const litrosConsPeriodoOrdenado = toOrderedChart(
+    Object.fromEntries(rendLabels.map((k) => [k, Math.round(rendAcum[k].litros * 100) / 100]))
+  )
+  const litrosRecPeriodoOrdenado = toOrderedChart(
+    Object.fromEntries(Object.entries(litrosRecPorPeriodo).map(([k, v]) => [k, Math.round(v * 100) / 100]))
+  )
 
   // ── Resumen por vehículo (tabla + exportación) ─────────────────────────────
   const resumenVehiculos: ResumenVehiculo[] = vehiculosOrdenados.map(([vehiculo, km]) => {
@@ -344,7 +425,7 @@ export default function IndicadoresView() {
         { etiqueta: 'Período', valor: descripcionPeriodo() },
         { etiqueta: 'Vehículo', valor: vehiculoFiltro ? labelVehiculo(vehiculoFiltro) : 'Todos' },
       ],
-      unidadPeriodo: esPorDia ? 'por día' : 'por mes',
+      unidadPeriodo: `por ${unidadTemporal}`,
       tipoGrafica,
       vehiculoFiltrado: Boolean(vehiculoFiltro),
       totales: {
@@ -590,7 +671,7 @@ export default function IndicadoresView() {
               onPdf={() => exportarIndicadoresPdf(datosParaExportar())}
             />
 
-            {/* KM por vehículo */}
+            {/* KM por vehículo (apilado por período + tendencia opcional) */}
             {!vehiculoFiltro && (
               <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 space-y-3">
                 <h2 className="text-sm font-semibold text-gray-700">KM por vehículo</h2>
@@ -598,12 +679,27 @@ export default function IndicadoresView() {
                   type={tipoGrafica === 'tendencia' ? 'line' : 'bar'}
                   data={{
                     labels: vehiculosOrdenados.map(([v]) => labelVehiculo(v)),
-                    datasets: buildDatasets(
-                      vehiculosOrdenados.map(([, km]) => km),
-                      'KM recorridos', 'rgba(37, 99, 235, 0.7)', tipoGrafica
+                    datasets: buildDatasetsStackedConTendencia(
+                      vehiculosOrdenados.map(([v]) => v),
+                      allPeriodKeys,
+                      kmPorVehiculoPeriodo,
+                      tipoGrafica
                     ),
                   }}
-                  options={tipoGrafica === 'ambas' ? chartOptionsConLeyenda : chartOptions}
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  options={(tipoGrafica === 'tendencia' ? chartOptionsConLeyenda : {
+                    ...chartOptionsStacked,
+                    plugins: {
+                      ...chartOptionsStacked.plugins,
+                      stackedTotal: {
+                        totals: vehiculosOrdenados.map(([v]) =>
+                          allPeriodKeys.reduce((s, pk) => s + (kmPorVehiculoPeriodo[v]?.[pk] ?? 0), 0)
+                        ),
+                        prefix: '',
+                      },
+                    },
+                  }) as any}
+                  plugins={tipoGrafica !== 'tendencia' ? [stackedTotalPlugin] : undefined}
                 />
               </div>
             )}
@@ -614,9 +710,9 @@ export default function IndicadoresView() {
               <Chart
                 type={tipoGrafica === 'tendencia' ? 'line' : 'bar'}
                 data={{
-                  labels: Object.keys(kmPorPeriodo),
+                  labels: kmPeriodoOrdenado.labels,
                   datasets: buildDatasets(
-                    Object.values(kmPorPeriodo),
+                    kmPeriodoOrdenado.values,
                     labelPeriodo, 'rgba(16, 185, 129, 0.7)', tipoGrafica
                   ),
                 }}
@@ -628,14 +724,14 @@ export default function IndicadoresView() {
             {hayDatosRendimiento && (
               <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 space-y-3">
                 <h2 className="text-sm font-semibold text-gray-700">
-                  Rendimiento {esPorDia ? 'por día' : 'por mes'} (km/L)
+                  Rendimiento por {unidadTemporal} (km/L)
                 </h2>
                 <Chart
                   type={tipoGrafica === 'tendencia' ? 'line' : 'bar'}
                   data={{
-                    labels: rendLabels,
+                    labels: rendPeriodoOrdenado.labels,
                     datasets: buildDatasets(
-                      rendValues,
+                      rendPeriodoOrdenado.values,
                       'km/L', 'rgba(139, 92, 246, 0.7)', tipoGrafica
                     ),
                   }}
@@ -648,14 +744,14 @@ export default function IndicadoresView() {
             {hayDatosRendimiento && (
               <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 space-y-3">
                 <h2 className="text-sm font-semibold text-gray-700">
-                  Litros consumidos {esPorDia ? 'por día' : 'por mes'}
+                  Litros consumidos por {unidadTemporal}
                 </h2>
                 <Chart
                   type={tipoGrafica === 'tendencia' ? 'line' : 'bar'}
                   data={{
-                    labels: rendLabels,
+                    labels: litrosConsPeriodoOrdenado.labels,
                     datasets: buildDatasets(
-                      rendLabels.map((k) => Math.round(rendAcum[k].litros * 100) / 100),
+                      litrosConsPeriodoOrdenado.values,
                       'Litros consumidos', 'rgba(239, 68, 68, 0.7)', tipoGrafica
                     ),
                   }}
@@ -668,14 +764,14 @@ export default function IndicadoresView() {
             {hayDatosLitrosRec && (
               <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 space-y-3">
                 <h2 className="text-sm font-semibold text-gray-700">
-                  Litros recargados {esPorDia ? 'por día' : 'por mes'}
+                  Litros recargados por {unidadTemporal}
                 </h2>
                 <Chart
                   type={tipoGrafica === 'tendencia' ? 'line' : 'bar'}
                   data={{
-                    labels: Object.keys(litrosRecPorPeriodo),
+                    labels: litrosRecPeriodoOrdenado.labels,
                     datasets: buildDatasets(
-                      Object.values(litrosRecPorPeriodo).map((v) => Math.round(v * 100) / 100),
+                      litrosRecPeriodoOrdenado.values,
                       'Litros recargados', 'rgba(20, 184, 166, 0.7)', tipoGrafica
                     ),
                   }}
@@ -684,7 +780,7 @@ export default function IndicadoresView() {
               </div>
             )}
 
-            {/* Costo por vehículo */}
+            {/* Costo por vehículo (apilado por período + tendencia opcional) */}
             {totalCosto > 0 && !vehiculoFiltro && (
               <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 space-y-3">
                 <h2 className="text-sm font-semibold text-gray-700">Costo de combustible por vehículo</h2>
@@ -692,12 +788,27 @@ export default function IndicadoresView() {
                   type={tipoGrafica === 'tendencia' ? 'line' : 'bar'}
                   data={{
                     labels: vehiculosCostoOrdenados.map(([v]) => labelVehiculo(v)),
-                    datasets: buildDatasets(
-                      vehiculosCostoOrdenados.map(([, c]) => c),
-                      'Costo ($)', 'rgba(245, 158, 11, 0.7)', tipoGrafica
+                    datasets: buildDatasetsStackedConTendencia(
+                      vehiculosCostoOrdenados.map(([v]) => v),
+                      allPeriodKeys,
+                      costoPorVehiculoPeriodo,
+                      tipoGrafica
                     ),
                   }}
-                  options={tipoGrafica === 'ambas' ? chartOptionsConLeyenda : chartOptions}
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  options={(tipoGrafica === 'tendencia' ? chartOptionsConLeyenda : {
+                    ...chartOptionsStacked,
+                    plugins: {
+                      ...chartOptionsStacked.plugins,
+                      stackedTotal: {
+                        totals: vehiculosCostoOrdenados.map(([v]) =>
+                          allPeriodKeys.reduce((s, pk) => s + (costoPorVehiculoPeriodo[v]?.[pk] ?? 0), 0)
+                        ),
+                        prefix: '$',
+                      },
+                    },
+                  }) as any}
+                  plugins={tipoGrafica !== 'tendencia' ? [stackedTotalPlugin] : undefined}
                 />
               </div>
             )}

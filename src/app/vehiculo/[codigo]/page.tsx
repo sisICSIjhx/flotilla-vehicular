@@ -12,7 +12,6 @@ interface UltimaCarga {
   litros_cargados: number
   precio_litro: number
   km_antes: number
-  km_despues: number
   created_at: string
 }
 
@@ -54,7 +53,7 @@ export default function VehiculoPage() {
         try {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const { data: carga } = await (supabase.from('cargas_gasolina') as any)
-            .select('litros_cargados, precio_litro, km_antes, km_despues, created_at')
+            .select('litros_cargados, precio_litro, km_antes, created_at')
             .eq('vehiculo_codigo', codigo)
             .order('created_at', { ascending: false })
             .limit(1)

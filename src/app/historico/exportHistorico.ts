@@ -76,24 +76,23 @@ export async function fetchRecorridosCompletos(
     if (lote.length < TAMANO_LOTE) break
   }
 
-  // Batch fetch fuel sums from cargas_gasolina
+  // Batch fetch fuel sums via RPC (incluye cargas con recorrido_id directo
+  // y cargas sin recorrido_id asociadas por rango km+fecha)
   const fuelMap: FuelMap = new Map()
   if (todos.length > 0) {
     try {
       const ids = todos.map((r) => r.id)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: cargasData } = await (supabase.from('cargas_gasolina') as any)
-        .select('recorrido_id, litros_cargados, precio_litro')
-        .in('recorrido_id', ids)
+      const { data: cargasData } = await (supabase as any)
+        .rpc('get_fuel_por_recorridos', { p_recorrido_ids: ids })
       for (const c of (cargasData ?? [])) {
-        const prev = fuelMap.get(c.recorrido_id) ?? { litros: 0, costo: 0 }
         fuelMap.set(c.recorrido_id, {
-          litros: prev.litros + Number(c.litros_cargados),
-          costo: prev.costo + Number(c.litros_cargados) * Number(c.precio_litro),
+          litros: Number(c.litros),
+          costo: Number(c.costo),
         })
       }
     } catch {
-      // tabla aún no existe — fuelMap stays empty
+      // RPC no disponible — fuelMap stays empty
     }
   }
 
@@ -322,7 +321,7 @@ export function exportarRecorridosPdf(
 
 const ENCABEZADOS_CARGAS = [
   'Fecha', 'Vehículo', 'Placa', 'Conductor',
-  'KM antes', 'KM después',
+  'KM',
   'Nivel antes', 'Nivel después',
   'Litros cargados', 'Precio por litro', 'Costo total',
   'Tipo', 'Destino/Recorrido', 'Observaciones',
@@ -335,7 +334,6 @@ function filasCargas(cargas: CargaGasolina[]): CeldaCsv[][] {
     c.placa ?? '',
     c.conductor,
     c.km_antes,
-    c.km_despues,
     combustibleLabel(c.combustible_antes),
     combustibleLabel(c.combustible_despues),
     redondear(c.litros_cargados, 3),
@@ -415,13 +413,12 @@ export function exportarCargasPdf(cargas: CargaGasolina[], filtros: FiltrosCarga
 
   reporte.agregarSeccion('Detalle de cargas')
   reporte.agregarTabla(
-    ['Fecha', 'Vehículo', 'Conductor', 'KM antes', 'KM después', 'Litros', '$/L', 'Costo total', 'Tipo'],
+    ['Fecha', 'Vehículo', 'Conductor', 'KM', 'Litros', '$/L', 'Costo total', 'Tipo'],
     cargas.map((c) => [
       formatFecha(c.fecha_carga),
       c.vehiculo_codigo,
       c.conductor,
       c.km_antes.toLocaleString(),
-      c.km_despues.toLocaleString(),
       formatDecimal(c.litros_cargados),
       `$${c.precio_litro.toFixed(3)}`,
       formatMoneda(c.costo_total),

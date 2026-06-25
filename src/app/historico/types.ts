@@ -44,7 +44,6 @@ export interface CargaGasolina {
   recorrido_id: string | null
   destino: string | null
   km_antes: number
-  km_despues: number
   combustible_antes: number
   combustible_despues: number
   litros_cargados: number
