@@ -123,6 +123,90 @@ export interface CargaGasolinaDB {
   updated_at: string
 }
 
+// ── Solicitudes de combustible ─────────────────────────
+export type SolicitudEstado =
+  | 'pendiente'
+  | 'autorizada'
+  | 'rechazada'
+  | 'cancelada'
+  | 'cargada_edenred'
+
+export type TipoCargaCombustible =
+  | 'operacion_campo'
+  | 'actividades_administrativas'
+  | 'atencion_usuario'
+  | 'clientes_potenciales'
+  | 'proyecto_alex'
+  | 'prestamo_personal'
+  | 'viaje_foraneo'
+  | 'emergencia_operativa'
+
+export interface SolicitudCombustible {
+  id: string
+  folio: string | null
+  recorrido_id: string | null
+  vehiculo_codigo: string
+  conductor_id: number
+  centro_costo_id: number | null
+
+  placa: string | null
+  solicitado_por: string | null
+  destino: string | null
+
+  km_solicitud: number
+  combustible_nivel: number
+  tipo_carga: TipoCargaCombustible
+  monto_solicitado: number
+  monto_sugerido: number | null
+  observaciones: string | null
+
+  fuera_horario: boolean
+  emergencia: boolean
+
+  estado: SolicitudEstado
+  motivo_rechazo: string | null
+  fecha_autorizacion: string | null
+  autorizado_por: string | null
+  monto_autorizado: number | null
+  fecha_carga_edenred: string | null
+  cargado_por: string | null
+  edenred_evidencia_path: string | null
+
+  created_at: string
+  updated_at: string
+}
+
+export interface SolicitudCombustibleAuditoria {
+  id: string
+  solicitud_id: string
+  accion: string
+  estado_anterior: string | null
+  estado_nuevo: string | null
+  usuario: string | null
+  comentario: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface Notificacion {
+  id: string
+  tipo: string
+  destinatario: 'admin' | 'operador'
+  titulo: string
+  mensaje: string | null
+  solicitud_id: string | null
+  vehiculo_codigo: string | null
+  leida: boolean
+  created_at: string
+}
+
+// Solicitud con joins para la vista administrativa
+export interface SolicitudCombustibleConDetalle extends SolicitudCombustible {
+  conductores: Pick<Conductor, 'id' | 'nombre'>
+  centros_costo: Pick<CentroCosto, 'id' | 'nombre' | 'codigo'> | null
+  vehiculos: Pick<Vehiculo, 'codigo' | 'apodo' | 'placa'>
+}
+
 // Tipo extendido con joins para mostrar en UI
 export interface RecorridoConDetalle extends Recorrido {
   conductores: Pick<Conductor, 'id' | 'nombre'>
@@ -171,6 +255,38 @@ export type Database = {
         Row: CargaGasolinaDB
         Insert: Omit<CargaGasolinaDB, 'created_at' | 'updated_at'> & { id?: string }
         Update: Partial<Omit<CargaGasolinaDB, 'id' | 'created_at' | 'updated_at'>>
+        Relationships: []
+      }
+      solicitudes_combustible: {
+        Row: SolicitudCombustible
+        Insert: Omit<
+          SolicitudCombustible,
+          | 'id'
+          | 'folio'
+          | 'estado'
+          | 'motivo_rechazo'
+          | 'fecha_autorizacion'
+          | 'autorizado_por'
+          | 'monto_autorizado'
+          | 'fecha_carga_edenred'
+          | 'cargado_por'
+          | 'edenred_evidencia_path'
+          | 'created_at'
+          | 'updated_at'
+        > & { id?: string }
+        Update: never // las transiciones de estado solo pasan por RPCs
+        Relationships: []
+      }
+      solicitudes_combustible_auditoria: {
+        Row: SolicitudCombustibleAuditoria
+        Insert: never // solo escriben los triggers/RPCs en BD
+        Update: never
+        Relationships: []
+      }
+      notificaciones: {
+        Row: Notificacion
+        Insert: never // las crean los triggers en BD
+        Update: { leida: boolean }
         Relationships: []
       }
     }
