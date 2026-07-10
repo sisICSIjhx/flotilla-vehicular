@@ -266,10 +266,17 @@ export default function SolicitudesView() {
     })
   }, [solicitudes, filtroEstado, filtroVehiculo, filtroOperador, filtroDesde, filtroHasta])
 
-  const vehiculosUnicos = useMemo(
-    () => [...new Set(solicitudes.map((s) => s.vehiculo_codigo))].sort(),
-    [solicitudes]
-  )
+  const vehiculosUnicos = useMemo(() => {
+    const porCodigo = new Map<string, string>()
+    for (const s of solicitudes) {
+      if (!porCodigo.has(s.vehiculo_codigo)) {
+        porCodigo.set(s.vehiculo_codigo, s.vehiculos?.apodo ?? '')
+      }
+    }
+    return [...porCodigo.entries()]
+      .map(([codigo, apodo]) => ({ codigo, apodo }))
+      .sort((a, b) => a.codigo.localeCompare(b.codigo))
+  }, [solicitudes])
   const operadoresUnicos = useMemo(
     () => [...new Set(solicitudes.map((s) => s.conductores?.nombre).filter(Boolean))].sort(),
     [solicitudes]
@@ -368,7 +375,9 @@ export default function SolicitudesView() {
               >
                 <option value="">Todas</option>
                 {vehiculosUnicos.map((v) => (
-                  <option key={v} value={v}>{v}</option>
+                  <option key={v.codigo} value={v.codigo}>
+                    {v.apodo ? `${v.codigo} · ${v.apodo}` : v.codigo}
+                  </option>
                 ))}
               </select>
             </div>
@@ -432,6 +441,7 @@ export default function SolicitudesView() {
                 <div className="flex items-center justify-between gap-2 text-sm">
                   <p className="text-gray-700">
                     <strong>{sol.vehiculo_codigo}</strong>
+                    {sol.vehiculos?.apodo ? ` · ${sol.vehiculos.apodo}` : ''}
                     {sol.vehiculos?.placa ? ` · ${sol.vehiculos.placa}` : ''}
                   </p>
                   <p className="font-semibold text-gray-800">{formatMoneda(Number(sol.monto_solicitado))}</p>
