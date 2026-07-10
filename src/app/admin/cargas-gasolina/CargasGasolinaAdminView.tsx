@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { combustibleLabel } from '@/lib/constants'
 import { formatFecha, formatMoneda, formatDecimal } from '@/utils/formatters'
@@ -130,9 +131,20 @@ export default function CargasGasolinaAdminView() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="bg-green-600 text-white px-4 py-5 shadow">
-        <h1 className="text-xl font-bold">Admin — Cargas de Gasolina</h1>
-        <p className="text-green-200 text-sm mt-0.5">{cargas.length} registros en total</p>
+      <header className="bg-green-600 text-white px-4 py-5 shadow flex items-center gap-3">
+        <Link
+          href="/gasolina"
+          className="text-green-200 hover:text-white transition-colors"
+          aria-label="Volver a Gasolina"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+          </svg>
+        </Link>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-xl font-bold">Admin — Cargas de Gasolina</h1>
+          <p className="text-green-200 text-sm mt-0.5">{cargas.length} registros en total</p>
+        </div>
       </header>
 
       <div className="max-w-4xl mx-auto px-4 py-6 space-y-4">
