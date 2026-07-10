@@ -77,6 +77,10 @@ export default function HomePage() {
           <span className="text-xl">⛽</span>
           Gasolina
         </a>
+        <a href="/solicitudes" className="flex flex-col items-center gap-0.5 text-gray-500 hover:text-blue-600 text-xs">
+          <span className="text-xl">📄</span>
+          Solicitudes
+        </a>
       </nav>
     </div>
   )

@@ -64,3 +64,29 @@ export function getPublicUrlCarga(path: string): string {
   const { data } = supabase.storage.from(CARGAS_BUCKET).getPublicUrl(path)
   return data.publicUrl
 }
+
+// ── Evidencias de carga Edenred ────────────────────────────
+const EDENRED_BUCKET = 'edenred'
+
+export function buildEvidenciaEdenredPath(solicitudId: string): string {
+  return `solicitudes/${solicitudId}/evidencia_${Date.now()}.jpg`
+}
+
+export async function subirEvidenciaEdenred(path: string, file: File): Promise<string> {
+  const { data, error } = await supabase.storage
+    .from(EDENRED_BUCKET)
+    .upload(path, file, { contentType: 'image/jpeg', upsert: false })
+
+  if (error) throw new Error(`Error al subir evidencia: ${error.message}`)
+
+  const { data: urlData } = supabase.storage
+    .from(EDENRED_BUCKET)
+    .getPublicUrl(data.path)
+
+  return urlData.publicUrl
+}
+
+export function getPublicUrlEdenred(path: string): string {
+  const { data } = supabase.storage.from(EDENRED_BUCKET).getPublicUrl(path)
+  return data.publicUrl
+}

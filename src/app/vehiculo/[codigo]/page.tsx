@@ -5,13 +5,26 @@ import { useParams, useRouter } from 'next/navigation'
 import { supabase, type Recorrido, type Vehiculo, type RecorridoParada } from '@/lib/supabase'
 import Loading from '@/components/common/Loading'
 import Button from '@/components/common/Button'
-import { formatFecha } from '@/utils/formatters'
-import { combustibleLabel } from '@/lib/constants'
+import { formatFecha, formatMoneda } from '@/utils/formatters'
+import {
+  combustibleLabel,
+  SOLICITUD_ESTADOS,
+  solicitudEstadoLabel,
+} from '@/lib/constants'
 
 interface UltimaCarga {
   litros_cargados: number
   precio_litro: number
   km_antes: number
+  created_at: string
+}
+
+interface SolicitudReciente {
+  folio: string | null
+  estado: string
+  monto_solicitado: number
+  monto_autorizado: number | null
+  motivo_rechazo: string | null
   created_at: string
 }
 
@@ -31,6 +44,7 @@ export default function VehiculoPage() {
   const [nombreCentroPendiente, setNombreCentroPendiente] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [ultimaCarga, setUltimaCarga] = useState<UltimaCarga | null>(null)
+  const [solicitudReciente, setSolicitudReciente] = useState<SolicitudReciente | null>(null)
 
   useEffect(() => {
     async function verificar() {
@@ -59,6 +73,20 @@ export default function VehiculoPage() {
             .limit(1)
             .maybeSingle()
           if (carga) setUltimaCarga(carga as UltimaCarga)
+        } catch {
+          // tabla aún no existe — ignorar silenciosamente
+        }
+
+        // 2b. Cargar última solicitud de combustible (resultado para el operador)
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: sol } = await (supabase.from('solicitudes_combustible') as any)
+            .select('folio, estado, monto_solicitado, monto_autorizado, motivo_rechazo, created_at')
+            .eq('vehiculo_codigo', codigo)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+          if (sol) setSolicitudReciente(sol as SolicitudReciente)
         } catch {
           // tabla aún no existe — ignorar silenciosamente
         }
@@ -269,6 +297,44 @@ export default function VehiculoPage() {
               className="w-full bg-green-600 text-white font-semibold rounded-xl px-4 py-3 hover:bg-green-700 active:bg-green-800 transition-colors"
             >
               Registrar carga de gasolina
+            </button>
+          </div>
+        )}
+
+        {/* ── Solicitar Combustible ── */}
+        {estado !== 'no_encontrado' && (
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 space-y-3 text-sm">
+            <p className="font-semibold text-gray-700">Solicitud de combustible</p>
+
+            {solicitudReciente && (
+              <div className="bg-gray-50 rounded-xl px-3 py-2 space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-gray-500">
+                    Última: <span className="font-mono font-semibold text-gray-700">{solicitudReciente.folio ?? '—'}</span>
+                  </p>
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-xs font-medium border ${
+                      SOLICITUD_ESTADOS[solicitudReciente.estado]?.badge ?? 'bg-gray-100 text-gray-600 border-gray-200'
+                    }`}
+                  >
+                    {solicitudEstadoLabel(solicitudReciente.estado)}
+                  </span>
+                </div>
+                <p className="text-gray-500">
+                  {formatFecha(solicitudReciente.created_at)} ·{' '}
+                  {formatMoneda(solicitudReciente.monto_autorizado ?? solicitudReciente.monto_solicitado)}
+                </p>
+                {solicitudReciente.estado === 'rechazada' && solicitudReciente.motivo_rechazo && (
+                  <p className="text-red-600 text-xs">Motivo: {solicitudReciente.motivo_rechazo}</p>
+                )}
+              </div>
+            )}
+
+            <button
+              onClick={() => router.push(`/solicitud-combustible?vehiculo=${codigo}`)}
+              className="w-full bg-orange-600 text-white font-semibold rounded-xl px-4 py-3 hover:bg-orange-700 active:bg-orange-800 transition-colors"
+            >
+              Solicitar Combustible
             </button>
           </div>
         )}
