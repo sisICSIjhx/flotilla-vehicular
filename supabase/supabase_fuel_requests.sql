@@ -307,7 +307,13 @@ RETURNS TRIGGER
 SECURITY DEFINER
 SET search_path = public
 AS $$
+DECLARE
+  v_apodo TEXT;
 BEGIN
+  SELECT apodo INTO v_apodo
+  FROM vehiculos
+  WHERE codigo = NEW.vehiculo_codigo;
+
   INSERT INTO solicitudes_combustible_auditoria
     (solicitud_id, accion, estado_anterior, estado_nuevo, usuario, comentario, metadata)
   VALUES (
@@ -329,6 +335,7 @@ BEGIN
     'Nueva Solicitud de Combustible',
     'Folio ' || COALESCE(NEW.folio, '') ||
     ' | Unidad: ' || NEW.vehiculo_codigo ||
+    COALESCE(' "' || NULLIF(TRIM(v_apodo), '') || '"', '') ||
     COALESCE(' (' || NEW.placa || ')', '') ||
     ' | Operador: ' || COALESCE(NEW.solicitado_por, 'N/A') ||
     ' | Destino: ' || COALESCE(NEW.destino, 'N/A') ||
