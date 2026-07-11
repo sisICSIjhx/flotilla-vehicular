@@ -53,6 +53,22 @@ async function resolverRecorridoId(vehiculoCodigo: string, kmAntes: number): Pro
   return null
 }
 
+async function procesarFoto(file: File, path: string, etiqueta: string): Promise<void> {
+  let comprimida: File
+  try {
+    comprimida = await comprimirFoto(file)
+  } catch (err) {
+    const detalle = err instanceof Error ? err.message : String(err)
+    throw new Error(`Foto "${etiqueta}" (compresión): ${detalle}`)
+  }
+  try {
+    await subirFotoCarga(path, comprimida)
+  } catch (err) {
+    const detalle = err instanceof Error ? err.message : String(err)
+    throw new Error(`Foto "${etiqueta}" (subida): ${detalle}`)
+  }
+}
+
 export default function FormCargaGasolina() {
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -192,16 +208,10 @@ export default function FormCargaGasolina() {
       const pathDespues = buildFotoCargaPath(vehiculoCodigo, cargaId, 'tablero_despues')
       const pathTicket = buildFotoCargaPath(vehiculoCodigo, cargaId, 'ticket')
 
-      const [fotoAntesComp, fotoDespuesComp, fotoTicketComp] = await Promise.all([
-        comprimirFoto(fotoAntes!),
-        comprimirFoto(fotoDespues!),
-        comprimirFoto(fotoTicket!),
-      ])
-
       await Promise.all([
-        subirFotoCarga(pathAntes, fotoAntesComp),
-        subirFotoCarga(pathDespues, fotoDespuesComp),
-        subirFotoCarga(pathTicket, fotoTicketComp),
+        procesarFoto(fotoAntes!, pathAntes, 'tablero antes'),
+        procesarFoto(fotoDespues!, pathDespues, 'tablero después'),
+        procesarFoto(fotoTicket!, pathTicket, 'ticket'),
       ])
 
       // Insertar carga
@@ -226,6 +236,7 @@ export default function FormCargaGasolina() {
       setExito(true)
       setTimeout(() => router.push(`/vehiculo/${vehiculoCodigo}`), 2000)
     } catch (err) {
+      console.error('Error al guardar carga de gasolina:', err)
       setErrorGeneral(err instanceof Error ? err.message : 'Error al guardar. Intenta de nuevo.')
     } finally {
       setEnviando(false)
