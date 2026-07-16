@@ -16,7 +16,8 @@ if (!supabaseUrl || !supabaseAnonKey) {
 // 0=Vacío, 2=1/4, 4=1/2, 6=3/4, 8=Lleno
 export type CombustibleNivel = 0 | 2 | 4 | 6 | 8
 export type RecorridoEstado = 'abierto' | 'cerrado'
-export type VehiculoEstado = 'activo' | 'inactivo'
+// 'mantenimiento' requiere la migración mejoras_fase4_mantenimientos.sql
+export type VehiculoEstado = 'activo' | 'inactivo' | 'mantenimiento'
 export type ConductorEstado = 'activo' | 'inactivo'
 export type ConductorOrigen = 'catalogo' | 'manual'
 export type CentroCostoEstado = 'activo' | 'inactivo'
@@ -47,6 +48,18 @@ export interface Conductor {
   updated_at: string
 }
 
+// ── Bajas de empleados ─────────────────────────────────
+// (migración mejoras_fase6_empleados_bajas.sql)
+export type ConductorBajaTipo = 'baja' | 'reactivacion'
+
+export interface ConductorBaja {
+  id: number
+  conductor_id: number
+  motivo: string
+  tipo: ConductorBajaTipo
+  fecha: string
+}
+
 export interface Vehiculo {
   codigo: string
   apodo: string | null
@@ -61,6 +74,14 @@ export interface Vehiculo {
   estado: VehiculoEstado
   created_at: string
   updated_at: string
+
+  // ── Resguardo (migración mejoras_fase3_resguardo.sql) ──
+  ubicacion_default?: string | null
+  conductor_designado_id?: number | null
+
+  // ── Programa preventivo (migración mejoras_fase4_mantenimientos.sql) ──
+  intervalo_mantenimiento_km?: number | null
+  km_ultimo_mantenimiento?: number | null
 }
 
 export interface Recorrido {
@@ -98,6 +119,9 @@ export interface RecorridoParada {
   foto_parada_path: string | null
 
   estado: ParadaEstado
+  // 'admin' = capturada retroactivamente desde /admin/recorridos
+  // (migración mejoras_fase1_recorridos_admin.sql)
+  origen?: 'operativo' | 'admin'
   created_at: string
   updated_at: string
 }
@@ -172,6 +196,8 @@ export interface SolicitudCombustible {
   cargado_por: string | null
   edenred_evidencia_path: string | null
 
+  eliminado: boolean
+
   created_at: string
   updated_at: string
 }
@@ -186,6 +212,59 @@ export interface SolicitudCombustibleAuditoria {
   comentario: string | null
   metadata: Record<string, unknown> | null
   created_at: string
+}
+
+// ── Auditoría de ediciones admin sobre recorridos ──────
+// (migración mejoras_fase1_recorridos_admin.sql)
+export interface RecorridoAuditoria {
+  id: string
+  recorrido_id: string
+  accion: string
+  datos_anteriores: Record<string, unknown> | null
+  datos_nuevos: Record<string, unknown> | null
+  realizado_por: string | null
+  comentario: string | null
+  created_at: string
+}
+
+// ── Mantenimientos ─────────────────────────────────────
+// (migración mejoras_fase4_mantenimientos.sql)
+export type MantenimientoTipo = 'preventivo' | 'correctivo' | 'otro'
+export type MantenimientoEstado = 'programado' | 'en_taller' | 'completado'
+
+export interface Mantenimiento {
+  id: string
+  vehiculo_codigo: string
+  tipo: MantenimientoTipo
+  estado: MantenimientoEstado
+  descripcion: string
+  lugar: string | null
+  km_al_ingreso: number | null
+  fecha_ingreso: string
+  fecha_salida: string | null
+  costo: number | null
+  factura_path: string | null
+  observaciones: string | null
+  created_at: string
+  updated_at: string
+}
+
+// ── Refacciones ────────────────────────────────────────
+// (migración mejoras_fase5_refacciones.sql)
+export interface Refaccion {
+  id: string
+  vehiculo_codigo: string
+  mantenimiento_id: string | null
+  nombre: string
+  motivo: string
+  costo: number
+  proveedor: string | null
+  fecha_compra: string
+  km_al_momento: number | null
+  factura_path: string | null
+  observaciones: string | null
+  created_at: string
+  updated_at: string
 }
 
 export interface Notificacion {
@@ -205,6 +284,21 @@ export interface SolicitudCombustibleConDetalle extends SolicitudCombustible {
   conductores: Pick<Conductor, 'id' | 'nombre'>
   centros_costo: Pick<CentroCosto, 'id' | 'nombre' | 'codigo'> | null
   vehiculos: Pick<Vehiculo, 'codigo' | 'apodo' | 'placa'>
+}
+
+// Entrada de auditoría con la solicitud embebida, para la pantalla
+// /solicitudes/historial (ediciones y eliminaciones administrativas)
+export interface SolicitudCombustibleAuditoriaConDetalle extends SolicitudCombustibleAuditoria {
+  solicitudes_combustible: {
+    folio: string | null
+    vehiculo_codigo: string
+    estado: SolicitudEstado
+    monto_solicitado: number
+    monto_autorizado: number | null
+    vehiculos: Pick<Vehiculo, 'apodo' | 'placa'>
+    conductores: Pick<Conductor, 'nombre'>
+    centros_costo: Pick<CentroCosto, 'nombre'> | null
+  } | null
 }
 
 // Tipo extendido con joins para mostrar en UI
@@ -271,10 +365,11 @@ export type Database = {
           | 'fecha_carga_edenred'
           | 'cargado_por'
           | 'edenred_evidencia_path'
+          | 'eliminado'
           | 'created_at'
           | 'updated_at'
         > & { id?: string }
-        Update: never // las transiciones de estado solo pasan por RPCs
+        Update: never // las transiciones de estado y edición/eliminación solo pasan por RPCs
         Relationships: []
       }
       solicitudes_combustible_auditoria: {

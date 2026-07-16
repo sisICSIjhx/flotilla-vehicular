@@ -69,9 +69,9 @@ export default function HomePage() {
           <span className="text-xl">📊</span>
           Indicadores
         </a>
-        <a href="/admin/vehiculos" className="flex flex-col items-center gap-0.5 text-gray-500 hover:text-blue-600 text-xs">
-          <span className="text-xl">🚗</span>
-          Vehículos
+        <a href="/admin" className="flex flex-col items-center gap-0.5 text-gray-500 hover:text-blue-600 text-xs">
+          <span className="text-xl">⚙️</span>
+          Admin
         </a>
         <a href="/gasolina" className="flex flex-col items-center gap-0.5 text-gray-500 hover:text-green-600 text-xs">
           <span className="text-xl">⛽</span>

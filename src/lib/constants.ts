@@ -51,7 +51,60 @@ export function solicitudEstadoLabel(estado: string): string {
   return SOLICITUD_ESTADOS[estado]?.label ?? estado
 }
 
+// ── Historial de cambios administrativos sobre solicitudes ─
+// (migración mejoras_fase7_solicitudes_edicion_admin.sql)
+export const HISTORIAL_SOLICITUD_TIPOS: Record<
+  string,
+  { label: string; badge: string; rowBg: string }
+> = {
+  edicion_admin: {
+    label: 'Editado',
+    badge: 'bg-orange-100 text-orange-700 border-orange-200',
+    rowBg: 'bg-orange-50 border-orange-200',
+  },
+  eliminacion_admin: {
+    label: 'Eliminado',
+    badge: 'bg-red-100 text-red-700 border-red-200',
+    rowBg: 'bg-red-50 border-red-200',
+  },
+}
+
+export function historialSolicitudTipoLabel(accion: string): string {
+  return HISTORIAL_SOLICITUD_TIPOS[accion]?.label ?? accion
+}
+
+// Campos de admin editables en una solicitud (nunca los del conductor)
+export const CAMPOS_EDITABLES_SOLICITUD_LABEL: Record<string, string> = {
+  monto_autorizado: 'Monto autorizado',
+  motivo_rechazo: 'Motivo de rechazo',
+  autorizado_por: 'Autorizado / resuelto por',
+  cargado_por: 'Cargado por (Edenred)',
+}
+
 // Umbral de justificación: monto solicitado > sugerido * 1.30
 export const SOLICITUD_UMBRAL_SOBREMONTO = 1.3
 // Hora local a partir de la cual una solicitud se marca fuera de horario
 export const SOLICITUD_HORA_LIMITE = 20
+
+// ── Mantenimientos ─────────────────────────────────────────
+export const MANTENIMIENTO_TIPOS = [
+  { value: 'preventivo', label: 'Preventivo' },
+  { value: 'correctivo', label: 'Correctivo' },
+  { value: 'otro', label: 'Otro' },
+] as const
+
+export function mantenimientoTipoLabel(value: string): string {
+  return MANTENIMIENTO_TIPOS.find((t) => t.value === value)?.label ?? value
+}
+
+export const MANTENIMIENTO_ESTADOS: Record<string, { label: string; badge: string }> = {
+  programado: { label: 'Programado', badge: 'bg-blue-100 text-blue-800 border-blue-200' },
+  en_taller: { label: 'En taller', badge: 'bg-amber-100 text-amber-800 border-amber-200' },
+  completado: { label: 'Completado', badge: 'bg-green-100 text-green-800 border-green-200' },
+}
+
+// Pre-alerta de mantenimiento preventivo: cuántos km antes
+// del umbral se empieza a avisar "próximo a vencer"
+export const MANTENIMIENTO_PREALERTA_KM = 500
+// Ventana (días) para estimar el km diario promedio de una unidad
+export const MANTENIMIENTO_VENTANA_KM_DIARIO_DIAS = 30

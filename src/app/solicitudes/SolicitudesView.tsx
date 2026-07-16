@@ -12,6 +12,8 @@ import {
   solicitudEstadoLabel,
   tipoCargaLabel,
   combustibleLabel,
+  HISTORIAL_SOLICITUD_TIPOS,
+  historialSolicitudTipoLabel,
 } from '@/lib/constants'
 import { formatFecha, formatMoneda } from '@/utils/formatters'
 import { comprimirFoto } from '@/lib/imageCompression'
@@ -63,17 +65,48 @@ export default function SolicitudesView() {
   const [procesando, setProcesando] = useState<string | null>(null)
   const [errorAccion, setErrorAccion] = useState<string | null>(null)
 
+  // ── Edición admin (monto/rechazo/responsables) ──
+  const [editando, setEditando] = useState<SolicitudCombustibleConDetalle | null>(null)
+  const [editMontoAutorizado, setEditMontoAutorizado] = useState('')
+  const [editMotivoRechazo, setEditMotivoRechazo] = useState('')
+  const [editAutorizadoPor, setEditAutorizadoPor] = useState('')
+  const [editCargadoPor, setEditCargadoPor] = useState('')
+  const [motivoEdicion, setMotivoEdicion] = useState('')
+  const [guardandoEdicion, setGuardandoEdicion] = useState(false)
+  const [errorEdicion, setErrorEdicion] = useState<string | null>(null)
+
+  // ── Eliminación (soft delete) ──
+  const [eliminando, setEliminando] = useState<SolicitudCombustibleConDetalle | null>(null)
+  const [motivoEliminacion, setMotivoEliminacion] = useState('')
+  const [confirmandoEliminar, setConfirmandoEliminar] = useState(false)
+  const [errorEliminacion, setErrorEliminacion] = useState<string | null>(null)
+
   useEffect(() => {
     setResponsable(sessionStorage.getItem(RESPONSABLE_KEY) ?? '')
   }, [])
 
   const cargarSolicitudes = useCallback(async () => {
     try {
+      const columnas =
+        '*, conductores(id, nombre), centros_costo(id, nombre, codigo), vehiculos(codigo, apodo, placa)'
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data, error } = await (supabase.from('solicitudes_combustible') as any)
-        .select('*, conductores(id, nombre), centros_costo(id, nombre, codigo), vehiculos(codigo, apodo, placa)')
+      let { data, error } = await (supabase.from('solicitudes_combustible') as any)
+        .select(columnas)
+        .eq('eliminado', false)
         .order('created_at', { ascending: false })
         .limit(500)
+
+      // La columna eliminado (mejoras_fase7_solicitudes_edicion_admin.sql)
+      // puede no existir todavía: degradar sin romper la lista mientras
+      // no se corra la migración (igual que recorridos_auditoria).
+      if (error?.message?.includes('eliminado')) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ;({ data, error } = await (supabase.from('solicitudes_combustible') as any)
+          .select(columnas)
+          .order('created_at', { ascending: false })
+          .limit(500))
+      }
 
       if (error) throw new Error(error.message)
       setSolicitudes((data ?? []) as SolicitudCombustibleConDetalle[])
@@ -161,9 +194,9 @@ export default function SolicitudesView() {
     }
   }
 
-  function validarResponsable(): boolean {
+  function validarResponsable(setError: (mensaje: string) => void = setErrorAccion): boolean {
     if (!responsable.trim()) {
-      setErrorAccion('Escribe el nombre del responsable antes de ejecutar la acción.')
+      setError('Escribe el nombre del responsable antes de ejecutar la acción.')
       return false
     }
     sessionStorage.setItem(RESPONSABLE_KEY, responsable.trim())
@@ -254,6 +287,114 @@ export default function SolicitudesView() {
     }
   }
 
+  // ── Edición admin ──
+  function abrirEditar(sol: SolicitudCombustibleConDetalle) {
+    setErrorAccion(null)
+    setEditando(sol)
+    setEditMontoAutorizado(sol.monto_autorizado != null ? String(sol.monto_autorizado) : '')
+    setEditMotivoRechazo(sol.motivo_rechazo ?? '')
+    setEditAutorizadoPor(sol.autorizado_por ?? '')
+    setEditCargadoPor(sol.cargado_por ?? '')
+    setMotivoEdicion('')
+    setErrorEdicion(null)
+  }
+
+  function cerrarEditar() {
+    setEditando(null)
+    setErrorEdicion(null)
+  }
+
+  async function guardarEdicion() {
+    if (!editando) return
+    if (!validarResponsable(setErrorEdicion)) return
+    if (!motivoEdicion.trim()) {
+      setErrorEdicion('El motivo de la edición es obligatorio.')
+      return
+    }
+
+    const params: Record<string, unknown> = {
+      p_solicitud_id: editando.id,
+      p_usuario: responsable.trim(),
+      p_motivo: motivoEdicion.trim(),
+    }
+
+    const montoOriginal = editando.monto_autorizado != null ? String(editando.monto_autorizado) : ''
+    if (editMontoAutorizado.trim() !== montoOriginal && editMontoAutorizado.trim() !== '') {
+      params.p_monto_autorizado = Number(editMontoAutorizado)
+    }
+    if (editMotivoRechazo.trim() !== (editando.motivo_rechazo ?? '')) {
+      params.p_motivo_rechazo = editMotivoRechazo.trim()
+    }
+    if (editAutorizadoPor.trim() !== (editando.autorizado_por ?? '')) {
+      params.p_autorizado_por = editAutorizadoPor.trim()
+    }
+    if (editCargadoPor.trim() !== (editando.cargado_por ?? '')) {
+      params.p_cargado_por = editCargadoPor.trim()
+    }
+
+    const huboCambios = Object.keys(params).some((k) =>
+      !['p_solicitud_id', 'p_usuario', 'p_motivo'].includes(k)
+    )
+    if (!huboCambios) {
+      setErrorEdicion('No hay cambios que guardar.')
+      return
+    }
+
+    setGuardandoEdicion(true)
+    setErrorEdicion(null)
+    try {
+      const { error } = await supabase.rpc('editar_solicitud_combustible_admin', params)
+      if (error) throw new Error(error.message)
+      setEditando(null)
+      setExpandida(null)
+      await cargarSolicitudes()
+    } catch (err) {
+      setErrorEdicion(err instanceof Error ? err.message : 'Error al guardar la edición.')
+    } finally {
+      setGuardandoEdicion(false)
+    }
+  }
+
+  // ── Eliminación (soft delete) ──
+  function abrirEliminar(sol: SolicitudCombustibleConDetalle) {
+    setErrorAccion(null)
+    setEliminando(sol)
+    setMotivoEliminacion('')
+    setErrorEliminacion(null)
+  }
+
+  function cerrarEliminar() {
+    setEliminando(null)
+    setErrorEliminacion(null)
+  }
+
+  async function confirmarEliminar() {
+    if (!eliminando) return
+    if (!validarResponsable(setErrorEliminacion)) return
+    if (!motivoEliminacion.trim()) {
+      setErrorEliminacion('El motivo de la eliminación es obligatorio.')
+      return
+    }
+
+    setConfirmandoEliminar(true)
+    setErrorEliminacion(null)
+    try {
+      const { error } = await supabase.rpc('eliminar_solicitud_combustible_admin', {
+        p_solicitud_id: eliminando.id,
+        p_usuario: responsable.trim(),
+        p_motivo: motivoEliminacion.trim(),
+      })
+      if (error) throw new Error(error.message)
+      setEliminando(null)
+      setExpandida(null)
+      await cargarSolicitudes()
+    } catch (err) {
+      setErrorEliminacion(err instanceof Error ? err.message : 'Error al eliminar la solicitud.')
+    } finally {
+      setConfirmandoEliminar(false)
+    }
+  }
+
   // ── Aplicar filtros ──
   const filtradas = useMemo(() => {
     return solicitudes.filter((s) => {
@@ -332,14 +473,20 @@ export default function SolicitudesView() {
         {errorGeneral && <ErrorMessage mensaje={errorGeneral} />}
 
         {/* ── Responsable ── */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 space-y-3">
           <Input
-            label="Nombre del responsable (para autorizar / rechazar / cargar)"
+            label="Nombre del responsable (para autorizar / rechazar / cargar / editar / eliminar)"
             type="text"
             value={responsable}
             onChange={(e) => setResponsable(e.target.value)}
             placeholder="Ej: Juan Pérez"
           />
+          <button
+            onClick={() => router.push('/solicitudes/historial')}
+            className="text-sm text-orange-700 hover:text-orange-800 font-medium"
+          >
+            Ver historial de cambios (ediciones y eliminaciones) →
+          </button>
         </div>
 
         {/* ── Totales ── */}
@@ -591,17 +738,42 @@ export default function SolicitudesView() {
                     <div className="space-y-1.5">
                       <p className="text-xs font-semibold text-gray-500 uppercase">Historial</p>
                       {auditoria.map((a) => (
-                        <div key={a.id} className="text-xs text-gray-600 bg-white rounded-lg border border-gray-200 px-3 py-2">
+                        <div
+                          key={a.id}
+                          className={`text-xs rounded-lg border px-3 py-2 ${
+                            HISTORIAL_SOLICITUD_TIPOS[a.accion]?.rowBg ?? 'bg-white border-gray-200 text-gray-600'
+                          }`}
+                        >
                           <span className="font-semibold">{formatFecha(a.created_at)}</span>
                           {' — '}
-                          {a.accion}
-                          {a.estado_anterior ? ` (${a.estado_anterior} → ${a.estado_nuevo})` : ''}
+                          {historialSolicitudTipoLabel(a.accion)}
+                          {a.estado_anterior && a.estado_anterior !== a.estado_nuevo
+                            ? ` (${a.estado_anterior} → ${a.estado_nuevo})`
+                            : ''}
                           {a.usuario ? ` · ${a.usuario}` : ''}
                           {a.comentario ? ` · ${a.comentario}` : ''}
                         </div>
                       ))}
                     </div>
                   )}
+
+                  {/* ── Acciones administrativas: editar / eliminar ── */}
+                  <div className="border-t border-gray-200 pt-3 flex gap-3">
+                    {['autorizada', 'rechazada', 'cargada_edenred'].includes(sol.estado) && (
+                      <button
+                        onClick={() => abrirEditar(sol)}
+                        className="flex-1 py-2 rounded-xl border border-orange-300 text-orange-700 font-semibold text-sm hover:bg-orange-50 transition-colors"
+                      >
+                        Editar
+                      </button>
+                    )}
+                    <button
+                      onClick={() => abrirEliminar(sol)}
+                      className="flex-1 py-2 rounded-xl border border-red-300 text-red-700 font-semibold text-sm hover:bg-red-50 transition-colors"
+                    >
+                      Eliminar
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -609,6 +781,130 @@ export default function SolicitudesView() {
         )}
         <div className="pb-8" />
       </main>
+
+      {/* ── Modal: editar campos de admin ── */}
+      {editando && (
+        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-5 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div>
+              <h3 className="font-bold text-gray-800">Editar solicitud {editando.folio ?? ''}</h3>
+              <p className="text-xs text-gray-500">
+                Solo se pueden corregir los datos capturados por el administrador. Los datos del conductor no son editables aquí.
+              </p>
+            </div>
+
+            {['autorizada', 'cargada_edenred'].includes(editando.estado) && (
+              <Input
+                label="Monto autorizado ($)"
+                type="number"
+                min={0}
+                step="0.01"
+                value={editMontoAutorizado}
+                onChange={(e) => setEditMontoAutorizado(e.target.value)}
+                inputMode="decimal"
+              />
+            )}
+            {editando.estado === 'rechazada' && (
+              <Input
+                label="Motivo de rechazo"
+                type="text"
+                value={editMotivoRechazo}
+                onChange={(e) => setEditMotivoRechazo(e.target.value)}
+              />
+            )}
+            {['autorizada', 'rechazada', 'cargada_edenred'].includes(editando.estado) && (
+              <Input
+                label="Autorizado / resuelto por"
+                type="text"
+                value={editAutorizadoPor}
+                onChange={(e) => setEditAutorizadoPor(e.target.value)}
+              />
+            )}
+            {editando.estado === 'cargada_edenred' && (
+              <Input
+                label="Cargado por (Edenred)"
+                type="text"
+                value={editCargadoPor}
+                onChange={(e) => setEditCargadoPor(e.target.value)}
+              />
+            )}
+
+            <div className="space-y-1">
+              <label className="block text-sm font-medium text-gray-700">
+                Motivo de la edición (obligatorio)
+              </label>
+              <textarea
+                value={motivoEdicion}
+                onChange={(e) => setMotivoEdicion(e.target.value)}
+                rows={3}
+                placeholder="Explica por qué se corrige este registro"
+                className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+              />
+            </div>
+
+            {errorEdicion && <ErrorMessage mensaje={errorEdicion} />}
+
+            <div className="flex gap-3">
+              <Button variant="secondary" onClick={cerrarEditar} disabled={guardandoEdicion}>
+                Cancelar
+              </Button>
+              <Button
+                onClick={guardarEdicion}
+                loading={guardandoEdicion}
+                disabled={guardandoEdicion}
+                className="!bg-orange-600 hover:!bg-orange-700 active:!bg-orange-800"
+              >
+                Guardar cambios
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal: eliminar (soft delete) ── */}
+      {eliminando && (
+        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-5 space-y-4">
+            <div>
+              <h3 className="font-bold text-gray-800">Eliminar solicitud {eliminando.folio ?? ''}</h3>
+              <p className="text-sm text-gray-600">
+                Se eliminará la solicitud de <strong>{eliminando.vehiculo_codigo}</strong> por{' '}
+                {formatMoneda(Number(eliminando.monto_solicitado))}. No se borra de la base de datos, pero dejará
+                de contar en los totales y en la lista de solicitudes.
+              </p>
+            </div>
+
+            <div className="space-y-1">
+              <label className="block text-sm font-medium text-gray-700">
+                Motivo de la eliminación (obligatorio)
+              </label>
+              <textarea
+                value={motivoEliminacion}
+                onChange={(e) => setMotivoEliminacion(e.target.value)}
+                rows={3}
+                placeholder="Explica por qué se elimina este registro"
+                className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+              />
+            </div>
+
+            {errorEliminacion && <ErrorMessage mensaje={errorEliminacion} />}
+
+            <div className="flex gap-3">
+              <Button variant="secondary" onClick={cerrarEliminar} disabled={confirmandoEliminar}>
+                Cancelar
+              </Button>
+              <Button
+                variant="danger"
+                onClick={confirmarEliminar}
+                loading={confirmandoEliminar}
+                disabled={confirmandoEliminar}
+              >
+                Confirmar eliminación
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

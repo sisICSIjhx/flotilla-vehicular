@@ -19,6 +19,20 @@ export function buildFotoParadaPath(
   return `vehiculos/${vehiculoCodigo}/recorridos/${recorridoId}/parada_${orden}.jpg`
 }
 
+export function buildFotoMantenimientoPath(
+  vehiculoCodigo: string,
+  mantenimientoId: string
+): string {
+  return `vehiculos/${vehiculoCodigo}/mantenimientos/${mantenimientoId}/factura.jpg`
+}
+
+export function buildFotoRefaccionPath(
+  vehiculoCodigo: string,
+  refaccionId: string
+): string {
+  return `vehiculos/${vehiculoCodigo}/refacciones/${refaccionId}/factura.jpg`
+}
+
 export function buildFotoCargaPath(
   vehiculoCodigo: string,
   cargaId: string,

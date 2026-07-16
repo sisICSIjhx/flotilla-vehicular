@@ -10,6 +10,7 @@ import {
   combustibleLabel,
   SOLICITUD_ESTADOS,
   solicitudEstadoLabel,
+  MANTENIMIENTO_PREALERTA_KM,
 } from '@/lib/constants'
 
 interface UltimaCarga {
@@ -45,6 +46,7 @@ export default function VehiculoPage() {
   const [error, setError] = useState<string | null>(null)
   const [ultimaCarga, setUltimaCarga] = useState<UltimaCarga | null>(null)
   const [solicitudReciente, setSolicitudReciente] = useState<SolicitudReciente | null>(null)
+  const [conductorDesignado, setConductorDesignado] = useState<string | null>(null)
 
   useEffect(() => {
     async function verificar() {
@@ -61,7 +63,23 @@ export default function VehiculoPage() {
           return
         }
 
-        setVehiculo(veh as Vehiculo)
+        const vehiculoData = veh as Vehiculo
+        setVehiculo(vehiculoData)
+
+        // 1b. Conductor designado (resguardo) — la columna existe
+        // solo después de la migración de fase 3
+        if (vehiculoData.conductor_designado_id) {
+          try {
+            const { data: cond } = await supabase
+              .from('conductores')
+              .select('nombre')
+              .eq('id', vehiculoData.conductor_designado_id)
+              .maybeSingle()
+            if (cond) setConductorDesignado((cond as { nombre: string }).nombre)
+          } catch {
+            // ignorar — dato informativo
+          }
+        }
 
         // 2. Cargar última carga de gasolina
         try {
@@ -158,6 +176,15 @@ export default function VehiculoPage() {
     )
   }
 
+  // ── Mantenimiento preventivo (requiere migración fase 4) ──
+  const enMantenimiento = vehiculo?.estado === 'mantenimiento'
+  const proximoMantenimientoKm =
+    vehiculo?.intervalo_mantenimiento_km != null
+      ? (vehiculo.km_ultimo_mantenimiento ?? 0) + vehiculo.intervalo_mantenimiento_km
+      : null
+  const kmParaMantenimiento =
+    proximoMantenimientoKm != null && vehiculo ? proximoMantenimientoKm - vehiculo.km_actual : null
+
   return (
     <div className="min-h-screen flex flex-col">
       <header className="bg-blue-600 text-white px-4 py-5 shadow">
@@ -195,10 +222,14 @@ export default function VehiculoPage() {
         {estado === 'disponible' && (
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-4">
             <div className="flex items-center gap-3">
-              <span className="w-3 h-3 rounded-full bg-green-500 flex-shrink-0" />
+              <span className={`w-3 h-3 rounded-full flex-shrink-0 ${enMantenimiento ? 'bg-amber-500' : 'bg-green-500'}`} />
               <div>
-                <p className="font-semibold text-gray-800">Vehículo disponible</p>
-                <p className="text-sm text-gray-500">Sin recorrido activo</p>
+                <p className="font-semibold text-gray-800">
+                  {enMantenimiento ? 'Unidad en mantenimiento' : 'Vehículo disponible'}
+                </p>
+                <p className="text-sm text-gray-500">
+                  {enMantenimiento ? 'En taller' : 'Sin recorrido activo'}
+                </p>
               </div>
             </div>
             {vehiculo?.placa && (
@@ -209,9 +240,16 @@ export default function VehiculoPage() {
                 KM actual: <strong>{vehiculo.km_actual.toLocaleString()}</strong>
               </p>
             )}
-            <Button onClick={() => router.push(`/salida?vehiculo=${codigo}`)}>
-              Registrar salida
-            </Button>
+            {enMantenimiento ? (
+              <div className="rounded-xl bg-amber-50 border border-amber-300 px-4 py-3 text-sm text-amber-800">
+                🔧 No se pueden registrar salidas mientras la unidad esté en el taller. El
+                administrador la reactivará al cerrar el mantenimiento.
+              </div>
+            ) : (
+              <Button onClick={() => router.push(`/salida?vehiculo=${codigo}`)}>
+                Registrar salida
+              </Button>
+            )}
           </div>
         )}
 
@@ -266,6 +304,55 @@ export default function VehiculoPage() {
                 ? `Completar parada #${paradaPendiente?.orden}`
                 : 'Registrar regreso'}
             </Button>
+
+            {/* El conductor puede añadir paradas aunque el viaje ya inició */}
+            <button
+              onClick={() =>
+                router.push(`/parada/nueva?vehiculo=${codigo}&recorrido=${recorridoAbierto.id}`)
+              }
+              className="w-full py-3 px-4 rounded-xl text-base font-semibold border border-purple-300 text-purple-700 bg-purple-50 hover:bg-purple-100 active:bg-purple-200 transition-colors"
+            >
+              ➕ Añadir parada a la ruta
+            </button>
+          </div>
+        )}
+
+        {/* ── Alerta de mantenimiento preventivo ── */}
+        {estado !== 'no_encontrado' && kmParaMantenimiento != null && kmParaMantenimiento <= MANTENIMIENTO_PREALERTA_KM && (
+          <div
+            className={`rounded-2xl border px-4 py-3 text-sm ${
+              kmParaMantenimiento <= 0
+                ? 'bg-red-50 border-red-300 text-red-800'
+                : 'bg-amber-50 border-amber-300 text-amber-800'
+            }`}
+          >
+            <p className="font-semibold">
+              {kmParaMantenimiento <= 0
+                ? '🔴 Mantenimiento preventivo vencido'
+                : '🟡 Mantenimiento preventivo próximo'}
+            </p>
+            <p className="mt-0.5">
+              {kmParaMantenimiento <= 0
+                ? `La unidad rebasó el umbral por ${Math.abs(kmParaMantenimiento).toLocaleString()} km. Repórtala con el administrador.`
+                : `Faltan ${kmParaMantenimiento.toLocaleString()} km para el próximo mantenimiento (a los ${proximoMantenimientoKm?.toLocaleString()} km).`}
+            </p>
+          </div>
+        )}
+
+        {/* ── Resguardo de la unidad ── */}
+        {estado !== 'no_encontrado' && vehiculo && (conductorDesignado || vehiculo.ubicacion_default) && (
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 space-y-1.5 text-sm">
+            <p className="font-semibold text-gray-700">Resguardo de la unidad</p>
+            {conductorDesignado && (
+              <p className="text-gray-600">
+                Conductor designado: <strong>{conductorDesignado}</strong>
+              </p>
+            )}
+            {vehiculo.ubicacion_default && (
+              <p className="text-gray-600">
+                Ubicación base: <strong>{vehiculo.ubicacion_default}</strong>
+              </p>
+            )}
           </div>
         )}
 

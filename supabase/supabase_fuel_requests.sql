@@ -342,7 +342,7 @@ BEGIN
     ' | KM: ' || NEW.km_solicitud ||
     ' | Nivel: ' || NEW.combustible_nivel || '/8' ||
     ' | Monto: $' || NEW.monto_solicitado ||
-    ' | Hora: ' || TO_CHAR(NEW.created_at, 'DD/MM/YYYY HH24:MI') ||
+    ' | Hora: ' || TO_CHAR(NEW.created_at AT TIME ZONE 'America/Mexico_City', 'DD/MM/YYYY HH24:MI') ||
     CASE WHEN NEW.emergencia THEN ' | EMERGENCIA' WHEN NEW.fuera_horario THEN ' | Fuera de horario' ELSE '' END,
     NEW.id,
     NEW.vehiculo_codigo

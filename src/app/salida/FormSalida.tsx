@@ -49,6 +49,7 @@ export default function FormSalida() {
   const [cargandoDatos, setCargandoDatos] = useState(true)
   const [errorGeneral, setErrorGeneral] = useState<string | null>(null)
   const [kmBase, setKmBase] = useState<number>(0)
+  const [bloqueadoMantenimiento, setBloqueadoMantenimiento] = useState(false)
 
   // ── Conductor ──────────────────────────────────────
   const [conductorMode, setConductorMode] = useState<'lista' | 'manual'>('lista')
@@ -108,6 +109,30 @@ export default function FormSalida() {
       setConductores(conds ?? [])
       setCentrosCosto(centros ?? [])
       if (veh) setKmBase((veh as { km_actual: number }).km_actual)
+
+      // Unidad en taller: no se permiten salidas
+      const { data: est } = await supabase
+        .from('vehiculos')
+        .select('estado')
+        .eq('codigo', vehiculoCodigo)
+        .maybeSingle()
+      if ((est as { estado?: string } | null)?.estado === 'mantenimiento') {
+        setBloqueadoMantenimiento(true)
+      }
+
+      // Prefill del conductor designado (resguardo) — la columna existe
+      // solo después de la migración de fase 3; si falla se ignora
+      const { data: resguardo } = await supabase
+        .from('vehiculos')
+        .select('conductor_designado_id')
+        .eq('codigo', vehiculoCodigo)
+        .maybeSingle()
+      const designadoId = (resguardo as { conductor_designado_id?: number | null } | null)
+        ?.conductor_designado_id
+      if (designadoId && (conds ?? []).some((c) => c.id === designadoId)) {
+        setConductorId(String(designadoId))
+      }
+
       setCargandoDatos(false)
     }
 
@@ -271,6 +296,22 @@ export default function FormSalida() {
         <span className="text-6xl">✅</span>
         <p className="text-xl font-bold text-gray-800">Salida registrada</p>
         <p className="text-gray-500 text-center">Vehículo <strong>{vehiculoCodigo}</strong> en ruta.</p>
+      </div>
+    )
+  }
+
+  if (bloqueadoMantenimiento) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 px-4 text-center">
+        <span className="text-6xl">🔧</span>
+        <p className="text-xl font-bold text-gray-800">Unidad en mantenimiento</p>
+        <p className="text-gray-500 max-w-sm">
+          El vehículo <strong>{vehiculoCodigo}</strong> está en el taller y no puede registrar
+          salidas. El administrador lo reactivará al cerrar el mantenimiento.
+        </p>
+        <Button variant="secondary" onClick={() => router.push(`/vehiculo/${vehiculoCodigo}`)}>
+          Volver
+        </Button>
       </div>
     )
   }

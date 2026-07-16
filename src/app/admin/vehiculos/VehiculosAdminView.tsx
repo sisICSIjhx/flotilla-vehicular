@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import type { Vehiculo, CentroCosto, VehiculoEstado } from '@/lib/supabase'
+import type { Vehiculo, CentroCosto, Conductor, VehiculoEstado } from '@/lib/supabase'
 import Loading from '@/components/common/Loading'
 
 // =========================================================
@@ -22,6 +22,8 @@ interface FormData {
   capacidad_tanque_litros: string
   km_actual: string
   centro_costo_id: string
+  ubicacion_default: string
+  conductor_designado_id: string
 }
 
 interface UltimoEvento {
@@ -41,6 +43,8 @@ const FORM_VACIO: FormData = {
   capacidad_tanque_litros: '',
   km_actual: '',
   centro_costo_id: '',
+  ubicacion_default: '',
+  conductor_designado_id: '',
 }
 
 // =========================================================
@@ -50,6 +54,7 @@ export default function VehiculosAdminView() {
   const router = useRouter()
   const [vehiculos, setVehiculos] = useState<Vehiculo[]>([])
   const [centrosCosto, setCentrosCosto] = useState<CentroCosto[]>([])
+  const [conductores, setConductores] = useState<Pick<Conductor, 'id' | 'nombre'>[]>([])
   const [ultimosEventos, setUltimosEventos] = useState<Record<string, UltimoEvento>>({})
   const [filtro, setFiltro] = useState<FiltroEstado>('activo')
   const [cargando, setCargando] = useState(true)
@@ -76,14 +81,16 @@ export default function VehiculosAdminView() {
     setCargando(true)
     setError('')
     try {
-      const [{ data: vehs, error: errVehs }, { data: centros, error: errCentros }] =
+      const [{ data: vehs, error: errVehs }, { data: centros, error: errCentros }, { data: conds }] =
         await Promise.all([
           supabase.from('vehiculos').select('*').order('codigo'),
           supabase.from('centros_costo').select('*').eq('estado', 'activo').order('nombre'),
+          supabase.from('conductores').select('id, nombre').eq('estado', 'activo').order('nombre'),
         ])
 
       if (errVehs) throw errVehs
       if (errCentros) throw errCentros
+      setConductores((conds as Pick<Conductor, 'id' | 'nombre'>[]) ?? [])
 
       const listaVehs = vehs ?? []
       setVehiculos(listaVehs)
@@ -174,6 +181,8 @@ export default function VehiculosAdminView() {
       capacidad_tanque_litros: v.capacidad_tanque_litros.toString(),
       km_actual: v.km_actual.toString(),
       centro_costo_id: v.centro_costo_id?.toString() ?? '',
+      ubicacion_default: v.ubicacion_default ?? '',
+      conductor_designado_id: v.conductor_designado_id?.toString() ?? '',
     })
     setFormError('')
     setModoEdicion(true)
@@ -236,7 +245,7 @@ export default function VehiculosAdminView() {
     setGuardando(true)
     setFormError('')
 
-    const payload = {
+    const payload: Record<string, unknown> = {
       apodo: form.apodo.trim() || null,
       marca: form.marca.trim() || null,
       modelo: form.modelo.trim() || null,
@@ -246,21 +255,33 @@ export default function VehiculosAdminView() {
       capacidad_tanque_litros: parseFloat(form.capacidad_tanque_litros),
       km_actual: parseInt(form.km_actual),
       centro_costo_id: form.centro_costo_id ? parseInt(form.centro_costo_id) : null,
+      ubicacion_default: form.ubicacion_default.trim() || null,
+      conductor_designado_id: form.conductor_designado_id ? parseInt(form.conductor_designado_id) : null,
+    }
+
+    // Guarda el vehículo; si las columnas de resguardo aún no existen
+    // (migración fase 3 pendiente), reintenta sin ellas.
+    async function guardar(datos: Record<string, unknown>) {
+      if (modoEdicion) {
+        return supabase.from('vehiculos').update(datos).eq('codigo', form.codigo)
+      }
+      return supabase.from('vehiculos').insert({ ...datos, codigo: form.codigo.trim(), estado: 'activo' })
     }
 
     try {
-      if (modoEdicion) {
-        const { error } = await supabase
-          .from('vehiculos')
-          .update(payload)
-          .eq('codigo', form.codigo)
-        if (error) throw error
-      } else {
-        const { error } = await supabase
-          .from('vehiculos')
-          .insert({ ...payload, codigo: form.codigo.trim(), estado: 'activo' })
-        if (error) throw error
+      let { error } = await guardar(payload)
+
+      if (error && (error.message.includes('ubicacion_default') || error.message.includes('conductor_designado_id'))) {
+        const sinResguardo = { ...payload }
+        delete sinResguardo.ubicacion_default
+        delete sinResguardo.conductor_designado_id
+        const retry = await guardar(sinResguardo)
+        error = retry.error
+        if (!error) {
+          setError('Los campos de resguardo no se guardaron: ejecuta la migración mejoras_fase3_resguardo.sql en Supabase.')
+        }
       }
+      if (error) throw error
 
       setModalAbierto(false)
       await cargarDatos()
@@ -404,6 +425,7 @@ export default function VehiculosAdminView() {
                 key={v.codigo}
                 vehiculo={v}
                 centrosCosto={centrosCosto}
+                conductores={conductores}
                 ultimoEvento={ultimosEventos[v.codigo] ?? null}
                 onEditar={() => abrirEdicion(v)}
                 onToggle={() => abrirToggle(v)}
@@ -535,6 +557,26 @@ export default function VehiculosAdminView() {
                 </select>
               </div>
 
+              {/* ── Resguardo de la unidad ── */}
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-gray-700">Conductor designado (resguardo)</label>
+                <select name="conductor_designado_id" value={form.conductor_designado_id} onChange={handleChange}
+                  className="w-full rounded-xl border border-gray-300 bg-white px-3 py-3 text-base text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="">— Sin asignar —</option>
+                  {conductores.map((c) => (
+                    <option key={c.id} value={c.id}>{c.nombre}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-400">Se preselecciona en el formulario de salida.</p>
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-sm font-medium text-gray-700">Ubicación por defecto</label>
+                <input name="ubicacion_default" value={form.ubicacion_default} onChange={handleChange}
+                  placeholder="Ej: Patio central, Bodega norte"
+                  className="w-full rounded-xl border border-gray-300 bg-white px-3 py-3 text-base text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+
               {formError && (
                 <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">
                   {formError}
@@ -654,17 +696,20 @@ export default function VehiculosAdminView() {
 function VehiculoCard({
   vehiculo: v,
   centrosCosto,
+  conductores,
   ultimoEvento,
   onEditar,
   onToggle,
 }: {
   vehiculo: Vehiculo
   centrosCosto: CentroCosto[]
+  conductores: Pick<Conductor, 'id' | 'nombre'>[]
   ultimoEvento: UltimoEvento | null
   onEditar: () => void
   onToggle: () => void
 }) {
   const centro = centrosCosto.find((c) => c.id === v.centro_costo_id)
+  const designado = conductores.find((c) => c.id === v.conductor_designado_id)
 
   return (
     <div className={`bg-white rounded-2xl border shadow-sm p-4 ${
@@ -676,9 +721,13 @@ function VehiculoCard({
             <span className="font-mono font-bold text-gray-900 text-sm">{v.codigo}</span>
             {v.apodo && <span className="text-gray-600 text-sm font-medium truncate">{v.apodo}</span>}
             <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-              v.estado === 'activo' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
+              v.estado === 'activo'
+                ? 'bg-green-100 text-green-700'
+                : v.estado === 'mantenimiento'
+                  ? 'bg-amber-100 text-amber-700'
+                  : 'bg-gray-100 text-gray-500'
             }`}>
-              {v.estado === 'activo' ? 'Activo' : 'Inactivo'}
+              {v.estado === 'activo' ? 'Activo' : v.estado === 'mantenimiento' ? 'En taller' : 'Inactivo'}
             </span>
           </div>
 
@@ -693,6 +742,8 @@ function VehiculoCard({
             <span>KM: <span className="font-medium text-gray-700">{v.km_actual.toLocaleString('es-MX')}</span></span>
             <span>Tanque: <span className="font-medium text-gray-700">{v.capacidad_tanque_litros} L</span></span>
             {centro && <span>CC: <span className="font-medium text-gray-700">{centro.nombre}</span></span>}
+            {designado && <span>Resguardo: <span className="font-medium text-gray-700">{designado.nombre}</span></span>}
+            {v.ubicacion_default && <span>Ubicación: <span className="font-medium text-gray-700">{v.ubicacion_default}</span></span>}
           </div>
 
           {/* Último evento (baja o reactivación) */}
