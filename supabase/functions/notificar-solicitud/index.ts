@@ -32,7 +32,18 @@ interface NotificacionPayload {
   created_at: string
 }
 
-async function enviarCorreo(notif: NotificacionPayload, urlSolicitudes: string | null) {
+// Las notificaciones de mantenimiento llevan al panel de mantenimientos;
+// el resto (solicitudes de combustible) a la pantalla de autorización.
+function destinoDe(notif: NotificacionPayload, appUrl: string | null): { url: string | null; label: string } {
+  if (!appUrl) return { url: null, label: '' }
+  const base = appUrl.replace(/\/$/, '')
+  if (notif.tipo.startsWith('mantenimiento')) {
+    return { url: `${base}/admin/mantenimientos`, label: 'Ver mantenimientos' }
+  }
+  return { url: `${base}/solicitudes`, label: 'Autorizar/Rechazar' }
+}
+
+async function enviarCorreo(notif: NotificacionPayload, destino: { url: string | null; label: string }) {
   const apiKey = Deno.env.get('RESEND_API_KEY')
   const to = Deno.env.get('NOTIF_EMAIL_TO')
   if (!apiKey || !to) return { canal: 'email', enviado: false, razon: 'sin configurar' }
@@ -53,7 +64,7 @@ async function enviarCorreo(notif: NotificacionPayload, urlSolicitudes: string |
       html: `
         <h2>${notif.titulo}</h2>
         <ul>${detalle}</ul>
-        ${urlSolicitudes ? `<p><a href="${urlSolicitudes}">Abrir solicitudes para Autorizar / Rechazar</a></p>` : ''}
+        ${destino.url ? `<p><a href="${destino.url}">${destino.label}</a></p>` : ''}
       `,
     }),
   })
@@ -64,7 +75,7 @@ async function enviarCorreo(notif: NotificacionPayload, urlSolicitudes: string |
   return { canal: 'email', enviado: true }
 }
 
-async function enviarWhatsApp(notif: NotificacionPayload, urlSolicitudes: string | null) {
+async function enviarWhatsApp(notif: NotificacionPayload, destino: { url: string | null; label: string }) {
   const phone = Deno.env.get('CALLMEBOT_PHONE')
   const apikey = Deno.env.get('CALLMEBOT_APIKEY')
   if (!phone || !apikey) return { canal: 'whatsapp', enviado: false, razon: 'sin configurar' }
@@ -72,7 +83,7 @@ async function enviarWhatsApp(notif: NotificacionPayload, urlSolicitudes: string
   const texto = [
     `*${notif.titulo}*`,
     (notif.mensaje ?? '').split(' | ').join('\n'),
-    urlSolicitudes ? `Autorizar/Rechazar: ${urlSolicitudes}` : '',
+    destino.url ? `${destino.label}: ${destino.url}` : '',
   ]
     .filter(Boolean)
     .join('\n\n')
@@ -106,11 +117,11 @@ Deno.serve(async (req) => {
   }
 
   const appUrl = Deno.env.get('APP_URL')
-  const urlSolicitudes = appUrl ? `${appUrl.replace(/\/$/, '')}/solicitudes` : null
+  const destino = destinoDe(notif, appUrl ?? null)
 
   const resultados = await Promise.allSettled([
-    enviarCorreo(notif, urlSolicitudes),
-    enviarWhatsApp(notif, urlSolicitudes),
+    enviarCorreo(notif, destino),
+    enviarWhatsApp(notif, destino),
   ])
 
   const detalle = resultados.map((r) =>

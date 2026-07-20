@@ -29,8 +29,8 @@ const SECCIONES = [
     href: '/admin/mantenimientos',
     emoji: '🔧',
     titulo: 'Mantenimientos',
-    descripcion: 'Preventivos, correctivos, alertas y refacciones',
-    proximamente: true,
+    descripcion: 'Preventivos cada 10,000 km, correctivos, refacciones y gastos',
+    proximamente: false,
   },
   {
     href: '/admin/cargas-gasolina',
@@ -47,10 +47,10 @@ const SECCIONES = [
     proximamente: false,
   },
   {
-    href: '/solicitudes/historial',
+    href: '/admin/historial',
     emoji: '🕒',
     titulo: 'Historial de cambios',
-    descripcion: 'Ediciones y eliminaciones administrativas de solicitudes',
+    descripcion: 'Ediciones y eliminaciones administrativas de todos los módulos',
     proximamente: false,
   },
 ] as const

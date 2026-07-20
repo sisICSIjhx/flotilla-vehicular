@@ -245,12 +245,15 @@ export interface Mantenimiento {
   costo: number | null
   factura_path: string | null
   observaciones: string | null
+  // Soft delete admin (mejoras_fase9_bucket_auditoria_admin.sql)
+  eliminado?: boolean
   created_at: string
   updated_at: string
 }
 
-// ── Refacciones ────────────────────────────────────────
-// (migración mejoras_fase5_refacciones.sql)
+// ── Refacciones y otros gastos ─────────────────────────
+// (migración mejoras_fase5_refacciones.sql;
+//  categoria llega con mejoras_fase8_mantenimientos_v2.sql)
 export interface Refaccion {
   id: string
   vehiculo_codigo: string
@@ -263,8 +266,25 @@ export interface Refaccion {
   km_al_momento: number | null
   factura_path: string | null
   observaciones: string | null
+  categoria?: 'refaccion' | 'gasto'
+  // Soft delete admin (mejoras_fase9_bucket_auditoria_admin.sql)
+  eliminado?: boolean
   created_at: string
   updated_at: string
+}
+
+// ── Auditoría administrativa unificada ─────────────────
+// (migración mejoras_fase9_bucket_auditoria_admin.sql)
+export interface AuditoriaAdmin {
+  id: string
+  modulo: 'mantenimiento' | 'refaccion' | 'gasto' | string
+  registro_id: string
+  vehiculo_codigo: string | null
+  accion: 'edicion_admin' | 'eliminacion_admin' | string
+  motivo: string
+  antes: Record<string, unknown> | null
+  despues: Record<string, unknown> | null
+  created_at: string
 }
 
 export interface Notificacion {

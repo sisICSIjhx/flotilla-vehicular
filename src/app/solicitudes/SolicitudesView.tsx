@@ -112,10 +112,13 @@ export default function SolicitudesView() {
       setSolicitudes((data ?? []) as SolicitudCombustibleConDetalle[])
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      // Las alertas de mantenimiento (tipo mantenimiento_*) tienen su
+      // propio panel; aquí solo cuentan las de solicitudes
       const { count } = await (supabase.from('notificaciones') as any)
         .select('id', { count: 'exact', head: true })
         .eq('destinatario', 'admin')
         .eq('leida', false)
+        .not('tipo', 'like', 'mantenimiento%')
       setNoLeidas(count ?? 0)
     } catch (err) {
       setErrorGeneral(

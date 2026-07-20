@@ -19,18 +19,20 @@ export function buildFotoParadaPath(
   return `vehiculos/${vehiculoCodigo}/recorridos/${recorridoId}/parada_${orden}.jpg`
 }
 
+// Con timestamp: al editar se sube una foto nueva sin pisar la anterior
+// (y sin problemas de caché del navegador con la URL pública)
 export function buildFotoMantenimientoPath(
   vehiculoCodigo: string,
   mantenimientoId: string
 ): string {
-  return `vehiculos/${vehiculoCodigo}/mantenimientos/${mantenimientoId}/factura.jpg`
+  return `vehiculos/${vehiculoCodigo}/mantenimientos/${mantenimientoId}/factura_${Date.now()}.jpg`
 }
 
 export function buildFotoRefaccionPath(
   vehiculoCodigo: string,
   refaccionId: string
 ): string {
-  return `vehiculos/${vehiculoCodigo}/refacciones/${refaccionId}/factura.jpg`
+  return `vehiculos/${vehiculoCodigo}/refacciones/${refaccionId}/factura_${Date.now()}.jpg`
 }
 
 export function buildFotoCargaPath(
@@ -102,5 +104,29 @@ export async function subirEvidenciaEdenred(path: string, file: File): Promise<s
 
 export function getPublicUrlEdenred(path: string): string {
   const { data } = supabase.storage.from(EDENRED_BUCKET).getPublicUrl(path)
+  return data.publicUrl
+}
+
+// ── Facturas de mantenimientos, refacciones y otros gastos ─
+// Bucket separado "mantenimientos" (políticas en
+// mejoras_fase9_bucket_auditoria_admin.sql)
+const MANTENIMIENTOS_BUCKET = 'mantenimientos'
+
+export async function subirFotoMantenimiento(path: string, file: File): Promise<string> {
+  const { data, error } = await supabase.storage
+    .from(MANTENIMIENTOS_BUCKET)
+    .upload(path, file, { contentType: 'image/jpeg', upsert: false })
+
+  if (error) throw new Error(`Error al subir factura: ${error.message}`)
+
+  const { data: urlData } = supabase.storage
+    .from(MANTENIMIENTOS_BUCKET)
+    .getPublicUrl(data.path)
+
+  return urlData.publicUrl
+}
+
+export function getPublicUrlMantenimiento(path: string): string {
+  const { data } = supabase.storage.from(MANTENIMIENTOS_BUCKET).getPublicUrl(path)
   return data.publicUrl
 }

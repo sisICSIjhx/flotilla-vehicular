@@ -103,8 +103,36 @@ export const MANTENIMIENTO_ESTADOS: Record<string, { label: string; badge: strin
   completado: { label: 'Completado', badge: 'bg-green-100 text-green-800 border-green-200' },
 }
 
-// Pre-alerta de mantenimiento preventivo: cuántos km antes
-// del umbral se empieza a avisar "próximo a vencer"
+// Intervalo por defecto del programa preventivo: cada 10,000 km
+// contados desde el km 0 (umbrales en 10,000, 20,000, 30,000...)
+export const MANTENIMIENTO_INTERVALO_DEFAULT_KM = 10000
+// Pre-alerta dinámica: se avisa cuando, al ritmo de km diario de la
+// unidad, faltan estos días o menos para llegar al umbral
+export const MANTENIMIENTO_PREALERTA_DIAS = 7
+// Pre-alerta de respaldo en km cuando la unidad no tiene recorridos
+// recientes para estimar su ritmo diario
 export const MANTENIMIENTO_PREALERTA_KM = 500
 // Ventana (días) para estimar el km diario promedio de una unidad
 export const MANTENIMIENTO_VENTANA_KM_DIARIO_DIAS = 30
+
+// ── Refacciones y otros gastos ─────────────────────────────
+// (migración mejoras_fase8_mantenimientos_v2.sql: columna categoria)
+export type RefaccionCategoria = 'refaccion' | 'gasto'
+
+export const REFACCION_CATEGORIAS: Record<
+  RefaccionCategoria,
+  { label: string; labelPlural: string; emoji: string; descripcion: string }
+> = {
+  refaccion: {
+    label: 'Refacción',
+    labelPlural: 'Refacciones',
+    emoji: '🔩',
+    descripcion: 'Piezas compradas para la unidad (balatas, filtros, llantas...)',
+  },
+  gasto: {
+    label: 'Otro gasto',
+    labelPlural: 'Otros gastos',
+    emoji: '🧰',
+    descripcion: 'Aditamentos y equipo: tapetes, extintores, torretas, etc.',
+  },
+}

@@ -1,13 +1,13 @@
 import { Suspense } from 'react'
 import Loading from '@/components/common/Loading'
 import PasswordGate from '@/components/common/PasswordGate'
-import MantenimientosHub from './MantenimientosHub'
+import CalendarioView from './CalendarioView'
 
-export default function MantenimientosAdminPage() {
+export default function CalendarioMantenimientoPage() {
   return (
-    <PasswordGate title="Mantenimientos">
+    <PasswordGate title="Calendario de mantenimientos">
       <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><Loading /></div>}>
-        <MantenimientosHub />
+        <CalendarioView />
       </Suspense>
     </PasswordGate>
   )

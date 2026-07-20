@@ -1,13 +1,13 @@
 import { Suspense } from 'react'
 import Loading from '@/components/common/Loading'
 import PasswordGate from '@/components/common/PasswordGate'
-import MantenimientosHub from './MantenimientosHub'
+import UnidadesView from './UnidadesView'
 
-export default function MantenimientosAdminPage() {
+export default function UnidadesMantenimientoPage() {
   return (
-    <PasswordGate title="Mantenimientos">
+    <PasswordGate title="Estado de unidades">
       <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><Loading /></div>}>
-        <MantenimientosHub />
+        <UnidadesView />
       </Suspense>
     </PasswordGate>
   )
