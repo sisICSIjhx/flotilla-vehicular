@@ -202,17 +202,17 @@ export default function FormCargaGasolina() {
       const kmA = Number(kmAntes)
       const recorridoIdFinal = await resolverRecorridoId(vehiculoCodigo, kmA)
 
-      // Generar ID y subir 3 fotos en paralelo
+      // Generar ID y subir las 3 fotos
       const cargaId = crypto.randomUUID()
       const pathAntes = buildFotoCargaPath(vehiculoCodigo, cargaId, 'tablero_antes')
       const pathDespues = buildFotoCargaPath(vehiculoCodigo, cargaId, 'tablero_despues')
       const pathTicket = buildFotoCargaPath(vehiculoCodigo, cargaId, 'ticket')
 
-      await Promise.all([
-        procesarFoto(fotoAntes!, pathAntes, 'tablero antes'),
-        procesarFoto(fotoDespues!, pathDespues, 'tablero después'),
-        procesarFoto(fotoTicket!, pathTicket, 'ticket'),
-      ])
+      // Secuencial a propósito: decodificar tres fotos de cámara a la vez
+      // agota la memoria del decodificador en móviles y la compresión falla.
+      await procesarFoto(fotoAntes!, pathAntes, 'tablero antes')
+      await procesarFoto(fotoDespues!, pathDespues, 'tablero después')
+      await procesarFoto(fotoTicket!, pathTicket, 'ticket')
 
       // Insertar carga
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef } from 'react'
+import { normalizarImagen } from '@/lib/imageCompression'
 
 interface PhotoCaptureProps {
   onPhoto: (file: File) => void
@@ -14,20 +15,60 @@ export default function PhotoCapture({
   error,
 }: PhotoCaptureProps) {
   const [preview, setPreview] = useState<string | null>(null)
+  const [errorCaptura, setErrorCaptura] = useState<string | null>(null)
+  const [convirtiendo, setConvirtiendo] = useState(false)
   const cameraRef = useRef<HTMLInputElement>(null)
   const galleryRef = useRef<HTMLInputElement>(null)
 
-  function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
-    const url = URL.createObjectURL(file)
-    setPreview(url)
-    onPhoto(file)
+
+    setErrorCaptura(null)
+
+    // El File de la cámara solo apunta a un archivo temporal del sistema; el SO
+    // puede liberarlo antes de que se envíe el formulario y entonces ya no hay
+    // forma de leerlo. Se copian los bytes a memoria ahora, recién capturados.
+    let enMemoria: File
+    try {
+      const bytes = await file.arrayBuffer()
+      if (bytes.byteLength === 0) throw new Error('el archivo llegó vacío')
+      enMemoria = new File([bytes], file.name || 'foto.jpg', {
+        type: file.type || 'image/jpeg',
+        lastModified: file.lastModified,
+      })
+    } catch {
+      setErrorCaptura('No se pudo leer la foto. Vuelve a tomarla.')
+      if (cameraRef.current) cameraRef.current.value = ''
+      if (galleryRef.current) galleryRef.current.value = ''
+      return
+    }
+
+    // Los iPhone guardan HEIC en la galería y Chrome no sabe pintarlo: se
+    // convierte aquí para que el preview funcione y el envío no pueda fallar
+    // por formato.
+    let lista: File
+    setConvirtiendo(true)
+    try {
+      lista = await normalizarImagen(enMemoria)
+    } catch {
+      setErrorCaptura('No se pudo leer el formato de esta imagen. Intenta con otra foto.')
+      if (cameraRef.current) cameraRef.current.value = ''
+      if (galleryRef.current) galleryRef.current.value = ''
+      return
+    } finally {
+      setConvirtiendo(false)
+    }
+
+    if (preview) URL.revokeObjectURL(preview)
+    setPreview(URL.createObjectURL(lista))
+    onPhoto(lista)
   }
 
   function handleRetake() {
     if (preview) URL.revokeObjectURL(preview)
     setPreview(null)
+    setErrorCaptura(null)
     if (cameraRef.current) cameraRef.current.value = ''
     if (galleryRef.current) galleryRef.current.value = ''
   }
@@ -36,7 +77,12 @@ export default function PhotoCapture({
     <div className="space-y-1">
       <p className="block text-sm font-medium text-gray-700">{label}</p>
 
-      {preview ? (
+      {convirtiendo ? (
+        <div className="flex flex-col items-center justify-center w-full border-2 border-dashed border-gray-300 rounded-xl bg-gray-50 py-5 gap-3">
+          <span className="text-3xl animate-pulse">⏳</span>
+          <p className="text-sm text-gray-500">Procesando imagen…</p>
+        </div>
+      ) : preview ? (
         <div className="space-y-2">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
@@ -55,7 +101,7 @@ export default function PhotoCapture({
       ) : (
         <div
           className={`flex flex-col items-center justify-center w-full border-2 border-dashed rounded-xl bg-gray-50 py-5 gap-3 ${
-            error ? 'border-red-400' : 'border-gray-300'
+            (errorCaptura ?? error) ? 'border-red-400' : 'border-gray-300'
           }`}
         >
           <span className="text-3xl">📷</span>
@@ -100,7 +146,9 @@ export default function PhotoCapture({
         </div>
       )}
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {(errorCaptura ?? error) && (
+        <p className="text-sm text-red-600">{errorCaptura ?? error}</p>
+      )}
     </div>
   )
 }
