@@ -341,7 +341,7 @@ BEGIN
     ' | Destino: ' || COALESCE(NEW.destino, 'N/A') ||
     ' | KM: ' || NEW.km_solicitud ||
     ' | Nivel: ' || NEW.combustible_nivel || '/8' ||
-    ' | Monto: $' || NEW.monto_solicitado ||
+    ' | Monto: $ ' || NEW.monto_solicitado ||
     ' | Hora: ' || TO_CHAR(NEW.created_at AT TIME ZONE 'America/Mexico_City', 'DD/MM/YYYY HH24:MI') ||
     CASE WHEN NEW.emergencia THEN ' | EMERGENCIA' WHEN NEW.fuera_horario THEN ' | Fuera de horario' ELSE '' END,
     NEW.id,
@@ -420,7 +420,7 @@ BEGIN
   VALUES (
     'resultado_solicitud', 'operador', 'Solicitud de combustible autorizada',
     'Folio ' || COALESCE(v_sol.folio, '') || ' autorizada por ' || TRIM(p_usuario) ||
-    ' por $' || v_sol.monto_autorizado,
+    ' por $ ' || v_sol.monto_autorizado,
     p_solicitud_id, v_sol.vehiculo_codigo
   );
 
@@ -609,7 +609,7 @@ BEGIN
   VALUES (
     'resultado_solicitud', 'operador', 'Combustible cargado en Edenred',
     'Folio ' || COALESCE(v_sol.folio, '') || ': carga Edenred registrada por ' || TRIM(p_usuario) ||
-    ' por $' || v_sol.monto_autorizado,
+    ' por $ ' || v_sol.monto_autorizado,
     p_solicitud_id, v_sol.vehiculo_codigo
   );
 

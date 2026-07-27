@@ -11,6 +11,9 @@ import { supabase, type Vehiculo, type Mantenimiento, type MantenimientoTipo } f
 import Loading from '@/components/common/Loading'
 import Input from '@/components/common/Input'
 import Select from '@/components/common/Select'
+import PhotoCapture from '@/components/forms/PhotoCapture'
+import { comprimirFoto } from '@/lib/imageCompression'
+import { buildFotoMantenimientoPath, subirFotoMantenimiento } from '@/utils/storage'
 import {
   MANTENIMIENTO_TIPOS,
   MANTENIMIENTO_VENTANA_KM_DIARIO_DIAS,
@@ -66,6 +69,20 @@ export default function UnidadesView() {
 
   // Modal cierre (compartido)
   const [cierreMantenimiento, setCierreMantenimiento] = useState<Mantenimiento | null>(null)
+
+  // Modal registrar mantenimiento ya realizado (historial, no deshabilita la unidad)
+  const [pasadoVehiculo, setPasadoVehiculo] = useState<Vehiculo | null>(null)
+  const [pasadoTipo, setPasadoTipo] = useState<MantenimientoTipo>('preventivo')
+  const [pasadoDescripcion, setPasadoDescripcion] = useState('')
+  const [pasadoLugar, setPasadoLugar] = useState('')
+  const [pasadoKm, setPasadoKm] = useState('')
+  const [pasadoFechaIngreso, setPasadoFechaIngreso] = useState('')
+  const [pasadoFechaSalida, setPasadoFechaSalida] = useState('')
+  const [pasadoCosto, setPasadoCosto] = useState('')
+  const [pasadoObservaciones, setPasadoObservaciones] = useState('')
+  const [pasadoFoto, setPasadoFoto] = useState<File | null>(null)
+  const [pasadoError, setPasadoError] = useState('')
+  const [guardandoPasado, setGuardandoPasado] = useState(false)
 
   function abrirPrograma(v: Vehiculo) {
     setProgramaVehiculo(v)
@@ -168,6 +185,108 @@ export default function UnidadesView() {
       setIngresoError(e instanceof Error ? e.message : String(e))
     } finally {
       setGuardandoIngreso(false)
+    }
+  }
+
+  function abrirPasado(v: Vehiculo) {
+    setPasadoVehiculo(v)
+    setPasadoTipo('preventivo')
+    setPasadoDescripcion('')
+    setPasadoLugar('')
+    setPasadoKm('')
+    const hoy = hoyLocalInput()
+    setPasadoFechaIngreso(hoy)
+    setPasadoFechaSalida(hoy)
+    setPasadoCosto('')
+    setPasadoObservaciones('')
+    setPasadoFoto(null)
+    setPasadoError('')
+  }
+
+  async function guardarPasado() {
+    if (!pasadoVehiculo) return
+    if (!pasadoDescripcion.trim()) {
+      setPasadoError('Describe el mantenimiento que se realizó.')
+      return
+    }
+
+    const ingresoIso = localInputToIso(pasadoFechaIngreso)
+    const salidaIso = localInputToIso(pasadoFechaSalida)
+    if (!ingresoIso || !salidaIso) {
+      setPasadoError('Indica la fecha de ingreso y de salida del taller.')
+      return
+    }
+    const ahora = Date.now()
+    if (new Date(salidaIso).getTime() < new Date(ingresoIso).getTime()) {
+      setPasadoError('La fecha de salida no puede ser anterior a la de ingreso.')
+      return
+    }
+    if (new Date(ingresoIso).getTime() > ahora || new Date(salidaIso).getTime() > ahora) {
+      setPasadoError('Este mantenimiento ya debe haber ocurrido: usa fecha de hoy o anterior.')
+      return
+    }
+    const costoNum = pasadoCosto ? Number(pasadoCosto) : null
+    if (pasadoCosto && (isNaN(costoNum!) || costoNum! < 0)) {
+      setPasadoError('El costo no es válido.')
+      return
+    }
+
+    setGuardandoPasado(true)
+    try {
+      const kmNum = pasadoKm ? Number(pasadoKm) : null
+      const { data: nuevo, error: err } = await (supabase.from('mantenimientos') as any)
+        .insert({
+          vehiculo_codigo: pasadoVehiculo.codigo,
+          tipo: pasadoTipo,
+          estado: 'completado',
+          descripcion: pasadoDescripcion.trim(),
+          lugar: pasadoLugar.trim() || null,
+          km_al_ingreso: kmNum,
+          fecha_ingreso: ingresoIso,
+          fecha_salida: salidaIso,
+          costo: costoNum,
+          observaciones: pasadoObservaciones.trim() || null,
+        })
+        .select()
+        .single()
+      if (err) {
+        if (err.message.includes('mantenimientos')) {
+          throw new Error('Ejecuta la migración mejoras_fase4_mantenimientos.sql en Supabase.')
+        }
+        throw new Error(err.message)
+      }
+
+      if (pasadoFoto && nuevo) {
+        const comprimida = await comprimirFoto(pasadoFoto)
+        const facturaPath = buildFotoMantenimientoPath(pasadoVehiculo.codigo, nuevo.id)
+        await subirFotoMantenimiento(facturaPath, comprimida)
+        await (supabase.from('mantenimientos') as any)
+          .update({ factura_path: facturaPath })
+          .eq('id', nuevo.id)
+      }
+
+      // A propósito: no se toca vehiculos.estado. Es un registro histórico,
+      // no significa que la unidad esté en el taller ahora mismo (puede
+      // incluso tener un recorrido abierto en este momento).
+
+      // Si fue preventivo, actualiza la base del próximo servicio solo si
+      // este km es más reciente que el ya registrado (evita retroceder el
+      // programa si ya existe un mantenimiento posterior capturado).
+      if (pasadoTipo === 'preventivo' && kmNum != null) {
+        const kmPrevio = pasadoVehiculo.km_ultimo_mantenimiento
+        if (kmPrevio == null || kmNum > kmPrevio) {
+          await (supabase.from('vehiculos') as any)
+            .update({ km_ultimo_mantenimiento: kmNum })
+            .eq('codigo', pasadoVehiculo.codigo)
+        }
+      }
+
+      setPasadoVehiculo(null)
+      await recargar()
+    } catch (e: unknown) {
+      setPasadoError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setGuardandoPasado(false)
     }
   }
 
@@ -316,6 +435,13 @@ export default function UnidadesView() {
                     </button>
                   )}
                 </div>
+                <button
+                  onClick={() => abrirPasado(v)}
+                  disabled={requiereMigracion}
+                  className="w-full text-xs text-slate-500 hover:text-slate-700 font-medium underline underline-offset-2 disabled:opacity-50"
+                >
+                  + Registrar mantenimiento ya realizado (no deshabilita la unidad)
+                </button>
               </div>
             )
           })}
@@ -433,6 +559,103 @@ export default function UnidadesView() {
                 className="flex-1 py-3 rounded-xl bg-slate-700 text-white font-semibold hover:bg-slate-800 disabled:opacity-50 flex items-center justify-center gap-2">
                 {guardandoIngreso && <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
                 Ingresar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL: MANTENIMIENTO YA REALIZADO ── */}
+      {pasadoVehiculo && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+          <div className="absolute inset-0 bg-black/40" onClick={() => !guardandoPasado && setPasadoVehiculo(null)} />
+          <div className="relative bg-white w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto p-5 space-y-4">
+            <h3 className="text-lg font-bold text-gray-900">
+              Mantenimiento ya realizado · {pasadoVehiculo.codigo}
+            </h3>
+            <p className="text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
+              Úsalo para cargar un servicio que ya se hizo (aunque la unidad tenga
+              un recorrido abierto ahora mismo). Queda en el historial como
+              completado y <strong>no</strong> deshabilita la unidad.
+            </p>
+            {pasadoError && (
+              <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">{pasadoError}</div>
+            )}
+            <Select
+              label="Tipo de mantenimiento"
+              value={pasadoTipo}
+              onChange={(e) => setPasadoTipo(e.target.value as MantenimientoTipo)}
+              options={MANTENIMIENTO_TIPOS.map((t) => ({ value: t.value, label: t.label }))}
+            />
+            <div className="space-y-1">
+              <label className="block text-sm font-medium text-gray-700">
+                Descripción <span className="text-red-500">*</span>
+              </label>
+              <textarea
+                value={pasadoDescripcion}
+                onChange={(e) => setPasadoDescripcion(e.target.value)}
+                rows={2}
+                placeholder="Ej: Servicio de 10,000 km, cambio de aceite y filtros"
+                className="w-full rounded-xl border border-gray-300 bg-white px-3 py-3 text-sm text-gray-900 resize-none focus:outline-none focus:ring-2 focus:ring-slate-500"
+              />
+            </div>
+            <Input
+              label="Lugar / taller"
+              type="text"
+              value={pasadoLugar}
+              onChange={(e) => setPasadoLugar(e.target.value)}
+              placeholder="Ej: Taller García"
+            />
+            <Input
+              label="KM al momento del servicio"
+              type="number"
+              inputMode="numeric"
+              value={pasadoKm}
+              onChange={(e) => setPasadoKm(e.target.value)}
+            />
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                label="Fecha de ingreso"
+                type="datetime-local"
+                value={pasadoFechaIngreso}
+                onChange={(e) => setPasadoFechaIngreso(e.target.value)}
+              />
+              <Input
+                label="Fecha de salida"
+                type="datetime-local"
+                value={pasadoFechaSalida}
+                onChange={(e) => setPasadoFechaSalida(e.target.value)}
+              />
+            </div>
+            <Input
+              label="Costo total (MXN)"
+              type="number"
+              inputMode="decimal"
+              step="0.01"
+              value={pasadoCosto}
+              onChange={(e) => setPasadoCosto(e.target.value)}
+              placeholder="Ej: 2500.00"
+            />
+            <div className="space-y-1">
+              <label className="block text-sm font-medium text-gray-700">Observaciones</label>
+              <textarea
+                value={pasadoObservaciones}
+                onChange={(e) => setPasadoObservaciones(e.target.value)}
+                rows={2}
+                placeholder="Trabajos realizados, garantía, etc."
+                className="w-full rounded-xl border border-gray-300 bg-white px-3 py-3 text-sm text-gray-900 resize-none focus:outline-none focus:ring-2 focus:ring-slate-500"
+              />
+            </div>
+            <PhotoCapture label="Foto de factura / nota (opcional)" onPhoto={setPasadoFoto} />
+            <div className="flex gap-3">
+              <button onClick={() => setPasadoVehiculo(null)} disabled={guardandoPasado}
+                className="flex-1 py-3 rounded-xl border border-gray-300 text-gray-700 font-semibold hover:bg-gray-50 disabled:opacity-40">
+                Cancelar
+              </button>
+              <button onClick={guardarPasado} disabled={guardandoPasado}
+                className="flex-1 py-3 rounded-xl bg-slate-700 text-white font-semibold hover:bg-slate-800 disabled:opacity-50 flex items-center justify-center gap-2">
+                {guardandoPasado && <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                Guardar
               </button>
             </div>
           </div>
