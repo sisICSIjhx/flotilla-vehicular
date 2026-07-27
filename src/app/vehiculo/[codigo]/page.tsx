@@ -30,7 +30,7 @@ interface SolicitudReciente {
 }
 
 type SiguienteAccion = 'salida' | 'parada' | 'regreso'
-type Estado = 'cargando' | 'no_encontrado' | 'disponible' | 'en_ruta'
+type Estado = 'cargando' | 'no_encontrado' | 'disponible' | 'en_ruta' | 'suspendido_mantenimiento'
 
 export default function VehiculoPage() {
   const params = useParams()
@@ -125,6 +125,15 @@ export default function VehiculoPage() {
 
         const recorrido = rec as Recorrido
         setRecorridoAbierto(recorrido)
+
+        // La unidad entró a mantenimiento de forma excepcional sin cerrar
+        // este recorrido: el mantenimiento tiene prioridad, no se debe
+        // mostrar "en ruta" ni permitir parada/regreso mientras dure.
+        if (vehiculoData.estado === 'mantenimiento') {
+          setEstado('suspendido_mantenimiento')
+          return
+        }
+
         setEstado('en_ruta')
 
         // 3. Si tiene paradas, verificar cuál es la siguiente acción
@@ -250,6 +259,29 @@ export default function VehiculoPage() {
                 Registrar salida
               </Button>
             )}
+          </div>
+        )}
+
+        {estado === 'suspendido_mantenimiento' && recorridoAbierto && (
+          <div className="bg-white rounded-2xl shadow-sm border border-amber-200 p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <span className="w-3 h-3 rounded-full bg-amber-500 flex-shrink-0" />
+              <div>
+                <p className="font-semibold text-gray-800">En mantenimiento</p>
+                <p className="text-sm text-amber-700">Recorrido abierto temporalmente suspendido</p>
+              </div>
+            </div>
+            <p className="text-sm text-gray-600">
+              Salida: {formatFecha(recorridoAbierto.fecha_salida)} · KM salida:{' '}
+              <strong>{recorridoAbierto.km_salida.toLocaleString()}</strong>
+            </p>
+            <div className="rounded-xl bg-amber-50 border border-amber-300 px-4 py-3 text-sm text-amber-800">
+              🔧 La unidad entró a mantenimiento de forma excepcional mientras este recorrido
+              seguía abierto. No se pueden registrar paradas ni el regreso hasta que el
+              administrador cierre el mantenimiento; el recorrido continuará entonces con
+              normalidad. Si necesitas hacer algo urgente con este recorrido, contacta al
+              administrador.
+            </div>
           </div>
         )}
 

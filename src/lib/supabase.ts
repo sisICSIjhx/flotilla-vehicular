@@ -247,6 +247,12 @@ export interface Mantenimiento {
   observaciones: string | null
   // Soft delete admin (mejoras_fase9_bucket_auditoria_admin.sql)
   eliminado?: boolean
+  // Ingreso excepcional con recorrido abierto (mejoras_fase10_ingreso_excepcional.sql):
+  // el vehículo entró a taller sin cerrar su recorrido en curso.
+  ingreso_excepcional?: boolean
+  motivo_excepcion?: string | null
+  autorizado_por?: string | null
+  recorrido_abierto_id?: string | null
   created_at: string
   updated_at: string
 }

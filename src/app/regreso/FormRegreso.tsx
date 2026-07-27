@@ -30,6 +30,7 @@ export default function FormRegreso() {
   const [paradas, setParadas] = useState<RecorridoParadaConDetalle[]>([])
   const [cargando, setCargando] = useState(true)
   const [errorGeneral, setErrorGeneral] = useState<string | null>(null)
+  const [bloqueadoMantenimiento, setBloqueadoMantenimiento] = useState(false)
 
   // Campos
   const [kmRegreso, setKmRegreso] = useState('')
@@ -58,6 +59,19 @@ export default function FormRegreso() {
 
       if (error || !data) {
         setErrorGeneral('No se encontró un recorrido abierto para este vehículo.')
+        setCargando(false)
+        return
+      }
+
+      // La unidad puede haber entrado a mantenimiento excepcionalmente sin
+      // cerrar este recorrido: mientras dure, no se permite registrar el regreso.
+      const { data: veh } = await supabase
+        .from('vehiculos')
+        .select('estado')
+        .eq('codigo', vehiculoCodigo)
+        .maybeSingle()
+      if ((veh as { estado?: string } | null)?.estado === 'mantenimiento') {
+        setBloqueadoMantenimiento(true)
         setCargando(false)
         return
       }
@@ -158,6 +172,23 @@ export default function FormRegreso() {
         <span className="text-6xl">✅</span>
         <p className="text-xl font-bold text-gray-800">Regreso registrado</p>
         <p className="text-gray-500 text-center">Recorrido cerrado exitosamente.</p>
+      </div>
+    )
+  }
+
+  if (bloqueadoMantenimiento) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 px-4 text-center">
+        <span className="text-6xl">🔧</span>
+        <p className="text-xl font-bold text-gray-800">Unidad en mantenimiento</p>
+        <p className="text-gray-500 max-w-sm">
+          El vehículo <strong>{vehiculoCodigo}</strong> está en el taller (ingreso excepcional con
+          el recorrido abierto) y no puede registrar el regreso hasta que el administrador cierre
+          el mantenimiento.
+        </p>
+        <Button variant="secondary" onClick={() => router.push(`/vehiculo/${vehiculoCodigo}`)}>
+          Volver
+        </Button>
       </div>
     )
   }

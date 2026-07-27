@@ -32,6 +32,7 @@ export default function FormParada() {
   const [kmReferencia, setKmReferencia] = useState<number>(0)
   const [cargando, setCargando] = useState(true)
   const [errorGeneral, setErrorGeneral] = useState<string | null>(null)
+  const [bloqueadoMantenimiento, setBloqueadoMantenimiento] = useState(false)
 
   // Campos
   const [kmParada, setKmParada] = useState('')
@@ -62,6 +63,19 @@ export default function FormParada() {
 
         if (paradaError || !paradaData) {
           setErrorGeneral('No se encontró la parada pendiente.')
+          setCargando(false)
+          return
+        }
+
+        // La unidad puede haber entrado a mantenimiento excepcionalmente sin
+        // cerrar el recorrido: mientras dure, no se permite completar paradas.
+        const { data: veh } = await supabase
+          .from('vehiculos')
+          .select('estado')
+          .eq('codigo', vehiculoCodigo)
+          .maybeSingle()
+        if ((veh as { estado?: string } | null)?.estado === 'mantenimiento') {
+          setBloqueadoMantenimiento(true)
           setCargando(false)
           return
         }
@@ -168,6 +182,23 @@ export default function FormParada() {
         <p className="text-gray-500 text-center">
           Parada #{orden} completada. Verificando siguiente acción...
         </p>
+      </div>
+    )
+  }
+
+  if (bloqueadoMantenimiento) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 px-4 text-center">
+        <span className="text-6xl">🔧</span>
+        <p className="text-xl font-bold text-gray-800">Unidad en mantenimiento</p>
+        <p className="text-gray-500 max-w-sm">
+          El vehículo <strong>{vehiculoCodigo}</strong> está en el taller (ingreso excepcional con
+          el recorrido abierto) y no puede completar paradas hasta que el administrador cierre el
+          mantenimiento.
+        </p>
+        <Button variant="secondary" onClick={() => router.push(`/vehiculo/${vehiculoCodigo}`)}>
+          Volver
+        </Button>
       </div>
     )
   }

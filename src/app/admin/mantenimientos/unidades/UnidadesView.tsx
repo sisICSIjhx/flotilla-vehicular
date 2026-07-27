@@ -63,9 +63,16 @@ export default function UnidadesView() {
   const [ingresoDescripcion, setIngresoDescripcion] = useState('')
   const [ingresoLugar, setIngresoLugar] = useState('')
   const [ingresoKm, setIngresoKm] = useState('')
+  const [ingresoKmNoDisponible, setIngresoKmNoDisponible] = useState(false)
   const [ingresoFecha, setIngresoFecha] = useState('')
   const [ingresoError, setIngresoError] = useState('')
   const [guardandoIngreso, setGuardandoIngreso] = useState(false)
+  // Si el vehículo ya tiene un recorrido abierto, el ingreso solo puede
+  // hacerse como excepción autorizada (no cierra el recorrido)
+  const [ingresoRecorridoAbierto, setIngresoRecorridoAbierto] = useState<{ id: string } | null>(null)
+  const [ingresoAutorizadoPor, setIngresoAutorizadoPor] = useState('')
+  const [ingresoMotivoExcepcion, setIngresoMotivoExcepcion] = useState('')
+  const [cargandoAbrirIngreso, setCargandoAbrirIngreso] = useState(false)
 
   // Modal cierre (compartido)
   const [cierreMantenimiento, setCierreMantenimiento] = useState<Mantenimiento | null>(null)
@@ -127,14 +134,38 @@ export default function UnidadesView() {
     }
   }
 
-  function abrirIngreso(v: Vehiculo) {
+  async function abrirIngreso(v: Vehiculo) {
     setIngresoVehiculo(v)
     setIngresoTipo('preventivo')
     setIngresoDescripcion('')
     setIngresoLugar('')
-    setIngresoKm(v.km_actual.toString())
     setIngresoFecha(hoyLocalInput())
     setIngresoError('')
+    setIngresoAutorizadoPor('')
+    setIngresoMotivoExcepcion('')
+    setIngresoRecorridoAbierto(null)
+    setIngresoKmNoDisponible(false)
+    setIngresoKm('')
+    setCargandoAbrirIngreso(true)
+    try {
+      const { data: abierto } = await supabase
+        .from('recorridos')
+        .select('id')
+        .eq('vehiculo_codigo', v.codigo)
+        .eq('estado', 'abierto')
+        .maybeSingle()
+      if (abierto) {
+        // Modo excepcional: no se conoce el km real de ingreso (la unidad
+        // sigue en ruta), así que el campo se deja vacío a propósito en
+        // vez de precargar el km_actual consolidado.
+        setIngresoRecorridoAbierto(abierto as { id: string })
+      } else {
+        // Modo normal: el vehículo está detenido, el km_actual sí es confiable
+        setIngresoKm(v.km_actual.toString())
+      }
+    } finally {
+      setCargandoAbrirIngreso(false)
+    }
   }
 
   async function guardarIngreso() {
@@ -144,29 +175,79 @@ export default function UnidadesView() {
       return
     }
 
+    const modoExcepcional = !!ingresoRecorridoAbierto
+    if (modoExcepcional) {
+      if (!ingresoAutorizadoPor.trim()) {
+        setIngresoError('Indica quién autoriza el ingreso excepcional.')
+        return
+      }
+      if (!ingresoMotivoExcepcion.trim()) {
+        setIngresoError('Indica el motivo de la excepción.')
+        return
+      }
+    }
+
     setGuardandoIngreso(true)
     try {
-      // Un vehículo en ruta no puede entrar al taller
-      const { data: abierto } = await supabase
-        .from('recorridos')
-        .select('id')
-        .eq('vehiculo_codigo', ingresoVehiculo.codigo)
-        .eq('estado', 'abierto')
-        .maybeSingle()
-      if (abierto) {
-        throw new Error('Este vehículo tiene un recorrido abierto. Ciérralo antes de ingresarlo al taller.')
+      const kmNum = !modoExcepcional || !ingresoKmNoDisponible
+        ? (ingresoKm ? Number(ingresoKm) : null)
+        : null
+
+      if (modoExcepcional) {
+        // El recorrido pudo cerrarse entre abrir el modal y guardar: se
+        // vuelve a verificar para no perder la referencia al recorrido.
+        const { data: sigueAbierto } = await supabase
+          .from('recorridos')
+          .select('id')
+          .eq('id', ingresoRecorridoAbierto!.id)
+          .eq('estado', 'abierto')
+          .maybeSingle()
+        if (!sigueAbierto) {
+          throw new Error('El recorrido que estaba abierto ya se cerró. Vuelve a intentar el ingreso normal.')
+        }
+      } else {
+        // Un vehículo en ruta no puede entrar al taller por la vía normal
+        const { data: abierto } = await supabase
+          .from('recorridos')
+          .select('id')
+          .eq('vehiculo_codigo', ingresoVehiculo.codigo)
+          .eq('estado', 'abierto')
+          .maybeSingle()
+        if (abierto) {
+          throw new Error('Este vehículo tiene un recorrido abierto. Ciérralo antes de ingresarlo al taller, o usa el ingreso excepcional.')
+        }
       }
 
-      const { error: err } = await (supabase.from('mantenimientos') as any).insert({
-        vehiculo_codigo: ingresoVehiculo.codigo,
-        tipo: ingresoTipo,
-        estado: 'en_taller',
-        descripcion: ingresoDescripcion.trim(),
-        lugar: ingresoLugar.trim() || null,
-        km_al_ingreso: ingresoKm ? Number(ingresoKm) : null,
-        fecha_ingreso: localInputToIso(ingresoFecha) ?? new Date().toISOString(),
-      })
+      const { data: nuevo, error: err } = await (supabase.from('mantenimientos') as any)
+        .insert({
+          vehiculo_codigo: ingresoVehiculo.codigo,
+          tipo: ingresoTipo,
+          estado: 'en_taller',
+          descripcion: ingresoDescripcion.trim(),
+          lugar: ingresoLugar.trim() || null,
+          km_al_ingreso: kmNum,
+          fecha_ingreso: localInputToIso(ingresoFecha) ?? new Date().toISOString(),
+          ...(modoExcepcional
+            ? {
+                ingreso_excepcional: true,
+                motivo_excepcion: ingresoMotivoExcepcion.trim(),
+                autorizado_por: ingresoAutorizadoPor.trim(),
+                recorrido_abierto_id: ingresoRecorridoAbierto!.id,
+              }
+            : {}),
+        })
+        .select()
+        .single()
       if (err) {
+        // Ojo con el orden: el mensaje de columna faltante de PostgREST solo
+        // reporta UNA columna (la primera que encuentra, no necesariamente
+        // "ingreso_excepcional") y también incluye el nombre de la tabla
+        // ("... column of 'mantenimientos' ..."), así que hay que revisar las
+        // 4 columnas de fase 10 antes del aviso genérico de fase 4.
+        const columnasFase10 = ['ingreso_excepcional', 'motivo_excepcion', 'autorizado_por', 'recorrido_abierto_id']
+        if (modoExcepcional && columnasFase10.some((c) => err.message.includes(c))) {
+          throw new Error('Ejecuta la migración mejoras_fase10_ingreso_excepcional.sql en Supabase.')
+        }
         if (err.message.includes('mantenimientos')) {
           throw new Error('Ejecuta la migración mejoras_fase4_mantenimientos.sql en Supabase.')
         }
@@ -178,6 +259,18 @@ export default function UnidadesView() {
         .update({ estado: 'mantenimiento' })
         .eq('codigo', ingresoVehiculo.codigo)
       if (errVeh) throw new Error(errVeh.message)
+
+      // Dejar rastro en el historial del recorrido: sigue abierto, pero
+      // suspendido mientras la unidad está en taller
+      if (modoExcepcional && nuevo) {
+        await (supabase.from('recorridos_auditoria') as any).insert({
+          recorrido_id: ingresoRecorridoAbierto!.id,
+          accion: 'suspender_por_mantenimiento',
+          realizado_por: ingresoAutorizadoPor.trim(),
+          comentario: ingresoMotivoExcepcion.trim(),
+          datos_nuevos: { mantenimiento_id: nuevo.id },
+        })
+      }
 
       setIngresoVehiculo(null)
       await recargar()
@@ -501,66 +594,125 @@ export default function UnidadesView() {
           <div className="absolute inset-0 bg-black/40" onClick={() => !guardandoIngreso && setIngresoVehiculo(null)} />
           <div className="relative bg-white w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto p-5 space-y-4">
             <h3 className="text-lg font-bold text-gray-900">
-              Ingresar a taller · {ingresoVehiculo.codigo}
+              {ingresoRecorridoAbierto ? 'Ingreso excepcional a taller' : 'Ingresar a taller'} · {ingresoVehiculo.codigo}
             </h3>
-            <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-              La unidad quedará deshabilitada para salidas hasta registrar que salió del taller.
-              Al registrar el ingreso también se detienen los avisos de WhatsApp.
-            </p>
-            {ingresoError && (
-              <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">{ingresoError}</div>
+
+            {cargandoAbrirIngreso ? (
+              <Loading texto="Verificando recorrido..." />
+            ) : (
+              <>
+                {ingresoRecorridoAbierto ? (
+                  <p className="text-sm text-red-700 bg-red-50 border border-red-300 rounded-xl px-3 py-2">
+                    ⚠️ Esta unidad tiene un recorrido abierto. El ingreso excepcional{' '}
+                    <strong>no cerrará el recorrido</strong>: seguirá abierto (suspendido) y podrá
+                    finalizarse normalmente cuando la unidad salga del taller. Solo un administrador
+                    debe autorizar esto.
+                  </p>
+                ) : (
+                  <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                    La unidad quedará deshabilitada para salidas hasta registrar que salió del taller.
+                    Al registrar el ingreso también se detienen los avisos de WhatsApp.
+                  </p>
+                )}
+                {ingresoError && (
+                  <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">{ingresoError}</div>
+                )}
+                <Select
+                  label="Tipo de mantenimiento"
+                  value={ingresoTipo}
+                  onChange={(e) => setIngresoTipo(e.target.value as MantenimientoTipo)}
+                  options={MANTENIMIENTO_TIPOS.map((t) => ({ value: t.value, label: t.label }))}
+                />
+                <div className="space-y-1">
+                  <label className="block text-sm font-medium text-gray-700">
+                    Descripción <span className="text-red-500">*</span>
+                  </label>
+                  <textarea
+                    value={ingresoDescripcion}
+                    onChange={(e) => setIngresoDescripcion(e.target.value)}
+                    rows={2}
+                    placeholder="Ej: Servicio de 10,000 km, cambio de aceite y filtros"
+                    className="w-full rounded-xl border border-gray-300 bg-white px-3 py-3 text-sm text-gray-900 resize-none focus:outline-none focus:ring-2 focus:ring-slate-500"
+                  />
+                </div>
+                <Input
+                  label="Lugar / taller"
+                  type="text"
+                  value={ingresoLugar}
+                  onChange={(e) => setIngresoLugar(e.target.value)}
+                  placeholder="Ej: Taller García"
+                />
+
+                {ingresoRecorridoAbierto && (
+                  <>
+                    <Input
+                      label="Autorizado por"
+                      type="text"
+                      value={ingresoAutorizadoPor}
+                      onChange={(e) => setIngresoAutorizadoPor(e.target.value)}
+                      placeholder="Nombre del administrador que autoriza"
+                    />
+                    <div className="space-y-1">
+                      <label className="block text-sm font-medium text-gray-700">
+                        Motivo de la excepción <span className="text-red-500">*</span>
+                      </label>
+                      <textarea
+                        value={ingresoMotivoExcepcion}
+                        onChange={(e) => setIngresoMotivoExcepcion(e.target.value)}
+                        rows={2}
+                        placeholder="Ej: Avería en ruta, se remolcó al taller sin poder cerrar el recorrido"
+                        className="w-full rounded-xl border border-gray-300 bg-white px-3 py-3 text-sm text-gray-900 resize-none focus:outline-none focus:ring-2 focus:ring-slate-500"
+                      />
+                    </div>
+                  </>
+                )}
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Input
+                      label="KM al dejar la unidad"
+                      type="number"
+                      inputMode="numeric"
+                      value={ingresoKm}
+                      disabled={ingresoKmNoDisponible}
+                      onChange={(e) => setIngresoKm(e.target.value)}
+                    />
+                    {ingresoRecorridoAbierto && (
+                      <label className="flex items-center gap-2 text-xs text-gray-600">
+                        <input
+                          type="checkbox"
+                          checked={ingresoKmNoDisponible}
+                          onChange={(e) => {
+                            setIngresoKmNoDisponible(e.target.checked)
+                            if (e.target.checked) setIngresoKm('')
+                          }}
+                        />
+                        Kilometraje no disponible
+                      </label>
+                    )}
+                  </div>
+                  <Input
+                    label="Fecha de ingreso"
+                    type="datetime-local"
+                    value={ingresoFecha}
+                    onChange={(e) => setIngresoFecha(e.target.value)}
+                  />
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={() => setIngresoVehiculo(null)} disabled={guardandoIngreso}
+                    className="flex-1 py-3 rounded-xl border border-gray-300 text-gray-700 font-semibold hover:bg-gray-50 disabled:opacity-40">
+                    Cancelar
+                  </button>
+                  <button onClick={guardarIngreso} disabled={guardandoIngreso}
+                    className={`flex-1 py-3 rounded-xl text-white font-semibold disabled:opacity-50 flex items-center justify-center gap-2 ${
+                      ingresoRecorridoAbierto ? 'bg-red-700 hover:bg-red-800' : 'bg-slate-700 hover:bg-slate-800'
+                    }`}>
+                    {guardandoIngreso && <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                    {ingresoRecorridoAbierto ? 'Ingresar excepcionalmente' : 'Ingresar'}
+                  </button>
+                </div>
+              </>
             )}
-            <Select
-              label="Tipo de mantenimiento"
-              value={ingresoTipo}
-              onChange={(e) => setIngresoTipo(e.target.value as MantenimientoTipo)}
-              options={MANTENIMIENTO_TIPOS.map((t) => ({ value: t.value, label: t.label }))}
-            />
-            <div className="space-y-1">
-              <label className="block text-sm font-medium text-gray-700">
-                Descripción <span className="text-red-500">*</span>
-              </label>
-              <textarea
-                value={ingresoDescripcion}
-                onChange={(e) => setIngresoDescripcion(e.target.value)}
-                rows={2}
-                placeholder="Ej: Servicio de 10,000 km, cambio de aceite y filtros"
-                className="w-full rounded-xl border border-gray-300 bg-white px-3 py-3 text-sm text-gray-900 resize-none focus:outline-none focus:ring-2 focus:ring-slate-500"
-              />
-            </div>
-            <Input
-              label="Lugar / taller"
-              type="text"
-              value={ingresoLugar}
-              onChange={(e) => setIngresoLugar(e.target.value)}
-              placeholder="Ej: Taller García"
-            />
-            <div className="grid grid-cols-2 gap-3">
-              <Input
-                label="KM al dejar la unidad"
-                type="number"
-                inputMode="numeric"
-                value={ingresoKm}
-                onChange={(e) => setIngresoKm(e.target.value)}
-              />
-              <Input
-                label="Fecha de ingreso"
-                type="datetime-local"
-                value={ingresoFecha}
-                onChange={(e) => setIngresoFecha(e.target.value)}
-              />
-            </div>
-            <div className="flex gap-3">
-              <button onClick={() => setIngresoVehiculo(null)} disabled={guardandoIngreso}
-                className="flex-1 py-3 rounded-xl border border-gray-300 text-gray-700 font-semibold hover:bg-gray-50 disabled:opacity-40">
-                Cancelar
-              </button>
-              <button onClick={guardarIngreso} disabled={guardandoIngreso}
-                className="flex-1 py-3 rounded-xl bg-slate-700 text-white font-semibold hover:bg-slate-800 disabled:opacity-50 flex items-center justify-center gap-2">
-                {guardandoIngreso && <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
-                Ingresar
-              </button>
-            </div>
           </div>
         </div>
       )}

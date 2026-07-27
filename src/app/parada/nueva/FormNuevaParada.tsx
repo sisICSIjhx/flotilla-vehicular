@@ -29,6 +29,7 @@ export default function FormNuevaParada() {
   const [paradasExistentes, setParadasExistentes] = useState(0)
   const [cargando, setCargando] = useState(true)
   const [errorGeneral, setErrorGeneral] = useState<string | null>(null)
+  const [bloqueadoMantenimiento, setBloqueadoMantenimiento] = useState(false)
 
   const [centro, setCentro] = useState<CentroCostoValue>(CENTRO_COSTO_VACIO)
   const [errorCentro, setErrorCentro] = useState<string | undefined>(undefined)
@@ -44,7 +45,7 @@ export default function FormNuevaParada() {
 
     async function cargarDatos() {
       try {
-        const [{ data: rec }, { data: cens }, { count }] = await Promise.all([
+        const [{ data: rec }, { data: cens }, { count }, { data: veh }] = await Promise.all([
           supabase
             .from('recorridos')
             .select('*')
@@ -62,10 +63,19 @@ export default function FormNuevaParada() {
             .from('recorridos_paradas')
             .select('id', { count: 'exact', head: true })
             .eq('recorrido_id', recorridoId),
+          supabase.from('vehiculos').select('estado').eq('codigo', vehiculoCodigo).maybeSingle(),
         ])
 
         if (!rec) {
           setErrorGeneral('No se encontró un recorrido abierto para este vehículo.')
+          setCargando(false)
+          return
+        }
+
+        // La unidad puede haber entrado a mantenimiento excepcionalmente sin
+        // cerrar este recorrido: mientras dure, no se permiten paradas nuevas.
+        if ((veh as { estado?: string } | null)?.estado === 'mantenimiento') {
+          setBloqueadoMantenimiento(true)
           setCargando(false)
           return
         }
@@ -162,6 +172,23 @@ export default function FormNuevaParada() {
         <p className="text-gray-500 text-center">
           Se añadió a la ruta del vehículo <strong>{vehiculoCodigo}</strong>.
         </p>
+      </div>
+    )
+  }
+
+  if (bloqueadoMantenimiento) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 px-4 text-center">
+        <span className="text-6xl">🔧</span>
+        <p className="text-xl font-bold text-gray-800">Unidad en mantenimiento</p>
+        <p className="text-gray-500 max-w-sm">
+          El vehículo <strong>{vehiculoCodigo}</strong> está en el taller (ingreso excepcional con
+          el recorrido abierto) y no puede registrar paradas hasta que el administrador cierre el
+          mantenimiento.
+        </p>
+        <Button variant="secondary" onClick={() => router.push(`/vehiculo/${vehiculoCodigo}`)}>
+          Volver
+        </Button>
       </div>
     )
   }

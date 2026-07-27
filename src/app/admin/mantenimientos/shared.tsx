@@ -399,6 +399,17 @@ export function CierreMantenimientoModal({
           .eq('codigo', mantenimiento.vehiculo_codigo)
       }
 
+      // Si fue un ingreso excepcional, el recorrido nunca dejó de estar
+      // 'abierto' — solo se deja constancia de que se reanuda
+      if (mantenimiento.ingreso_excepcional && mantenimiento.recorrido_abierto_id) {
+        await (supabase.from('recorridos_auditoria') as any).insert({
+          recorrido_id: mantenimiento.recorrido_abierto_id,
+          accion: 'reanudar_tras_mantenimiento',
+          comentario: 'Recorrido reanudado después de mantenimiento',
+          datos_nuevos: { mantenimiento_id: mantenimiento.id },
+        })
+      }
+
       await onSaved()
       onClose()
     } catch (e: unknown) {
@@ -420,6 +431,13 @@ export function CierreMantenimientoModal({
           <br />
           En taller desde {formatFecha(mantenimiento.fecha_ingreso)} ({diasEnTaller(mantenimiento)} días).
         </p>
+        {mantenimiento.ingreso_excepcional && (
+          <p className="text-sm text-red-700 bg-red-50 border border-red-300 rounded-xl px-3 py-2">
+            ⚠️ Ingreso excepcional autorizado por <strong>{mantenimiento.autorizado_por}</strong>
+            {mantenimiento.motivo_excepcion && <> — {mantenimiento.motivo_excepcion}</>}. El recorrido
+            que quedó abierto se reanudará automáticamente al registrar esta salida.
+          </p>
+        )}
         {errorModal && (
           <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">{errorModal}</div>
         )}
