@@ -3,8 +3,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 // Semáforo preventivo por unidad: barra de avance hacia el próximo
-// servicio (cada 10,000 km desde el km 0), programa por unidad e
-// ingreso / salida de taller.
+// servicio (km del último mantenimiento + intervalo configurado),
+// programa por unidad e ingreso / salida de taller.
 
 import { useState } from 'react'
 import { supabase, type Vehiculo, type Mantenimiento, type MantenimientoTipo } from '@/lib/supabase'
@@ -30,6 +30,7 @@ import {
   diasEnTaller,
   hoyLocalInput,
   localInputToIso,
+  estimarKmMantenimientoPorFecha,
   type Semaforo,
 } from '../shared'
 
@@ -148,17 +149,35 @@ export default function UnidadesView() {
     setIngresoKm('')
     setCargandoAbrirIngreso(true)
     try {
+      // Consulta base: nunca debe depender de columnas de migraciones más
+      // nuevas (fase 11) — si esa consulta fallara, perderíamos la
+      // detección misma del recorrido abierto (regresión grave).
       const { data: abierto } = await supabase
         .from('recorridos')
-        .select('id')
+        .select('id, km_salida, centro_costo_id')
         .eq('vehiculo_codigo', v.codigo)
         .eq('estado', 'abierto')
         .maybeSingle()
       if (abierto) {
-        // Modo excepcional: no se conoce el km real de ingreso (la unidad
-        // sigue en ruta), así que el campo se deja vacío a propósito en
-        // vez de precargar el km_actual consolidado.
-        setIngresoRecorridoAbierto(abierto as { id: string })
+        // Modo excepcional: normalmente no se conoce el km real de ingreso
+        // (la unidad sigue en ruta), así que el campo se deja vacío a
+        // propósito en vez de precargar el km_actual consolidado — salvo
+        // que el recorrido abierto ya iba hacia el destino "Mantenimiento":
+        // en ese caso su km_salida es una referencia razonable y se sugiere.
+        setIngresoRecorridoAbierto({ id: abierto.id })
+        try {
+          const { data: centro } = await supabase
+            .from('centros_costo')
+            .select('es_destino_mantenimiento')
+            .eq('id', abierto.centro_costo_id)
+            .maybeSingle()
+          if ((centro as { es_destino_mantenimiento?: boolean } | null)?.es_destino_mantenimiento) {
+            setIngresoKm(abierto.km_salida.toString())
+          }
+        } catch {
+          // Falta la migración mejoras_fase11_destino_mantenimiento.sql:
+          // simplemente no se sugiere el km, el resto del flujo sigue igual.
+        }
       } else {
         // Modo normal: el vehículo está detenido, el km_actual sí es confiable
         setIngresoKm(v.km_actual.toString())
@@ -364,13 +383,17 @@ export default function UnidadesView() {
 
       // Si fue preventivo, actualiza la base del próximo servicio solo si
       // este km es más reciente que el ya registrado (evita retroceder el
-      // programa si ya existe un mantenimiento posterior capturado).
-      if (pasadoTipo === 'preventivo' && kmNum != null) {
-        const kmPrevio = pasadoVehiculo.km_ultimo_mantenimiento
-        if (kmPrevio == null || kmNum > kmPrevio) {
-          await (supabase.from('vehiculos') as any)
-            .update({ km_ultimo_mantenimiento: kmNum })
-            .eq('codigo', pasadoVehiculo.codigo)
+      // programa si ya existe un mantenimiento posterior capturado). Si no
+      // se capturó km, se intenta estimar por tiempo (recorrido previo).
+      if (pasadoTipo === 'preventivo') {
+        const kmBase = kmNum ?? (await estimarKmMantenimientoPorFecha(pasadoVehiculo.codigo, ingresoIso))
+        if (kmBase != null) {
+          const kmPrevio = pasadoVehiculo.km_ultimo_mantenimiento
+          if (kmPrevio == null || kmBase > kmPrevio) {
+            await (supabase.from('vehiculos') as any)
+              .update({ km_ultimo_mantenimiento: kmBase })
+              .eq('codigo', pasadoVehiculo.codigo)
+          }
         }
       }
 
@@ -412,7 +435,7 @@ export default function UnidadesView() {
     <div className="min-h-screen bg-gray-50 flex flex-col">
       <MantHeader
         titulo="Estado de unidades"
-        subtitulo="Programa preventivo cada 10,000 km desde el km 0"
+        subtitulo="Programa preventivo: km del último mantenimiento + intervalo"
         backHref="/admin/mantenimientos"
       />
 
@@ -569,9 +592,8 @@ export default function UnidadesView() {
               placeholder={`KM actual: ${programaVehiculo.km_actual.toLocaleString()}`}
             />
             <p className="text-xs text-gray-500">
-              Los servicios tocan en múltiplos del intervalo contados desde el km 0
-              (10,000 · 20,000 · 30,000...). El próximo será el primer múltiplo por
-              arriba del km del último mantenimiento.
+              El próximo servicio se calcula sumando el intervalo al km del último
+              mantenimiento registrado (no un múltiplo fijo desde el km 0).
             </p>
             <div className="flex gap-3">
               <button onClick={() => setProgramaVehiculo(null)} disabled={guardandoPrograma}

@@ -41,9 +41,10 @@ export interface SemaforoInfo {
   progreso: number | null
 }
 
-// Umbrales contados desde el km 0: el próximo servicio es el siguiente
-// múltiplo del intervalo por arriba del km del último mantenimiento
-// (10,000 / 20,000 / 30,000..., no "último + intervalo").
+// El próximo servicio se cuenta a partir del km real del último
+// mantenimiento registrado (km_ultimo_mantenimiento) + el intervalo
+// configurado — un umbral que rueda con el uso real de la unidad, ya
+// no un múltiplo fijo de 10,000 desde el km 0.
 export function calcularSemaforo(
   v: Vehiculo,
   kmDiario: number,
@@ -56,9 +57,10 @@ export function calcularSemaforo(
   if (intervalo == null || intervalo <= 0) {
     return { semaforo: 'sin_programa', proximoKm: null, faltanKm: null, fechaEstimada: null, progreso: null }
   }
-  const proximoKm = (Math.floor((v.km_ultimo_mantenimiento ?? 0) / intervalo) + 1) * intervalo
+  const kmBase = v.km_ultimo_mantenimiento ?? 0
+  const proximoKm = kmBase + intervalo
   const faltanKm = proximoKm - v.km_actual
-  const progreso = Math.min(1, Math.max(0, (v.km_actual - (proximoKm - intervalo)) / intervalo))
+  const progreso = Math.min(1, Math.max(0, (v.km_actual - kmBase) / intervalo))
   const fechaEstimada =
     faltanKm > 0 && kmDiario > 0
       ? new Date(Date.now() + (faltanKm / kmDiario) * 24 * 3600 * 1000)
@@ -99,6 +101,27 @@ export function diasEnTaller(m: Mantenimiento): number | null {
   const fin = m.fecha_salida ? new Date(m.fecha_salida).getTime() : Date.now()
   const dias = (fin - new Date(m.fecha_ingreso).getTime()) / (24 * 3600 * 1000)
   return Math.max(0, Math.round(dias * 10) / 10)
+}
+
+// Cuando un mantenimiento preventivo no trae km_al_ingreso (p.ej. un
+// ingreso excepcional con "kilometraje no disponible"), se usa el tiempo
+// como referencia: el km_salida del recorrido más reciente de esa unidad
+// con fecha_salida <= fechaReferencia (sin importar si ese recorrido
+// sigue abierto o ya se cerró). Si no hay ningún recorrido previo, no hay
+// forma de estimar y se devuelve null — el km debe pedirse manualmente.
+export async function estimarKmMantenimientoPorFecha(
+  vehiculoCodigo: string,
+  fechaReferencia: string
+): Promise<number | null> {
+  const { data } = await supabase
+    .from('recorridos')
+    .select('km_salida')
+    .eq('vehiculo_codigo', vehiculoCodigo)
+    .lte('fecha_salida', fechaReferencia)
+    .order('fecha_salida', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  return (data as { km_salida: number } | null)?.km_salida ?? null
 }
 
 // ── Datos compartidos del módulo ───────────────────────────
@@ -359,11 +382,44 @@ export function CierreMantenimientoModal({
   const [errorModal, setErrorModal] = useState('')
   const [guardando, setGuardando] = useState(false)
 
+  // Si es preventivo y no se registró km de ingreso, se intenta estimar
+  // por tiempo (km_salida del recorrido previo más reciente). Si no hay
+  // ningún recorrido de referencia, se debe pedir el km manualmente.
+  const requiereEstimacionKm = mantenimiento.tipo === 'preventivo' && mantenimiento.km_al_ingreso == null
+  const [estimandoKm, setEstimandoKm] = useState(requiereEstimacionKm)
+  const [kmEstimadoAuto, setKmEstimadoAuto] = useState<number | null>(null)
+  const [kmManual, setKmManual] = useState('')
+
+  useEffect(() => {
+    if (!requiereEstimacionKm) return
+    let activo = true
+    estimarKmMantenimientoPorFecha(mantenimiento.vehiculo_codigo, mantenimiento.fecha_ingreso).then((km) => {
+      if (activo) {
+        setKmEstimadoAuto(km)
+        setEstimandoKm(false)
+      }
+    })
+    return () => {
+      activo = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   async function guardar() {
     const costoNum = costo ? Number(costo) : null
     if (costo && (isNaN(costoNum!) || costoNum! < 0)) {
       setErrorModal('El costo no es válido.')
       return
+    }
+
+    let kmBaseEstimacion: number | null = null
+    if (requiereEstimacionKm && kmEstimadoAuto == null) {
+      const kmManualNum = kmManual ? Number(kmManual) : null
+      if (kmManualNum == null || isNaN(kmManualNum) || kmManualNum < 0) {
+        setErrorModal('No se encontró ningún recorrido previo para estimar el km de este mantenimiento: indícalo manualmente.')
+        return
+      }
+      kmBaseEstimacion = kmManualNum
     }
 
     setGuardando(true)
@@ -392,11 +448,16 @@ export function CierreMantenimientoModal({
         .eq('codigo', mantenimiento.vehiculo_codigo)
       if (errVeh) throw new Error(errVeh.message)
 
-      // Si fue preventivo, reiniciar la base del próximo mantenimiento
-      if (mantenimiento.tipo === 'preventivo' && mantenimiento.km_al_ingreso != null) {
-        await (supabase.from('vehiculos') as any)
-          .update({ km_ultimo_mantenimiento: mantenimiento.km_al_ingreso })
-          .eq('codigo', mantenimiento.vehiculo_codigo)
+      // Si fue preventivo, reiniciar la base del próximo mantenimiento:
+      // km real de ingreso si se registró, si no el estimado por tiempo
+      // (recorrido previo) o el capturado manualmente como respaldo.
+      if (mantenimiento.tipo === 'preventivo') {
+        const kmBase = mantenimiento.km_al_ingreso ?? kmEstimadoAuto ?? kmBaseEstimacion
+        if (kmBase != null) {
+          await (supabase.from('vehiculos') as any)
+            .update({ km_ultimo_mantenimiento: kmBase })
+            .eq('codigo', mantenimiento.vehiculo_codigo)
+        }
       }
 
       // Si fue un ingreso excepcional, el recorrido nunca dejó de estar
@@ -441,6 +502,30 @@ export function CierreMantenimientoModal({
         {errorModal && (
           <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">{errorModal}</div>
         )}
+        {requiereEstimacionKm && estimandoKm && (
+          <p className="text-sm text-gray-500">Calculando km de referencia para el programa preventivo...</p>
+        )}
+        {requiereEstimacionKm && !estimandoKm && kmEstimadoAuto != null && (
+          <p className="text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2">
+            No se registró el km de ingreso. Como base del próximo servicio se usará el km de salida
+            del recorrido previo más reciente: <strong>{kmEstimadoAuto.toLocaleString()} km</strong>.
+          </p>
+        )}
+        {requiereEstimacionKm && !estimandoKm && kmEstimadoAuto == null && (
+          <div className="space-y-1">
+            <p className="text-sm text-amber-700 bg-amber-50 border border-amber-300 rounded-xl px-3 py-2">
+              No se encontró ningún recorrido previo para estimar el km de este mantenimiento.
+              Indícalo manualmente para poder calcular el próximo servicio.
+            </p>
+            <Input
+              label="KM aproximado en ese momento"
+              type="number"
+              inputMode="numeric"
+              value={kmManual}
+              onChange={(e) => setKmManual(e.target.value)}
+            />
+          </div>
+        )}
         <Input
           label="Fecha de salida del taller"
           type="datetime-local"
@@ -467,10 +552,10 @@ export function CierreMantenimientoModal({
           />
         </div>
         <PhotoCapture label="Foto de factura / nota (opcional)" onPhoto={setFoto} />
-        {mantenimiento.tipo === 'preventivo' && (
+        {mantenimiento.tipo === 'preventivo' && mantenimiento.km_al_ingreso != null && (
           <p className="text-xs text-gray-500">
-            Al cerrar, el próximo servicio se programará en el siguiente múltiplo de 10,000 km
-            después de los {mantenimiento.km_al_ingreso?.toLocaleString() ?? '—'} km del ingreso.
+            Al cerrar, el próximo servicio se programará sumando el intervalo a los{' '}
+            {mantenimiento.km_al_ingreso.toLocaleString()} km del ingreso.
           </p>
         )}
         <div className="flex gap-3">

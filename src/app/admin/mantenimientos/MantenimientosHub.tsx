@@ -67,7 +67,7 @@ export default function MantenimientosHub() {
       href: '/admin/mantenimientos/unidades',
       emoji: '🚦',
       titulo: 'Estado de unidades',
-      descripcion: 'Semáforo preventivo cada 10,000 km, ingreso y salida de taller',
+      descripcion: 'Semáforo preventivo por intervalo, ingreso y salida de taller',
       dato:
         vencidos.length > 0
           ? `${vencidos.length} vencida(s)`
@@ -178,8 +178,8 @@ export default function MantenimientosHub() {
         ))}
 
         <p className="text-xs text-gray-400 text-center pt-2">
-          El programa preventivo corre cada 10,000 km contados desde el km 0
-          (servicios a los 10,000 · 20,000 · 30,000...).
+          El programa preventivo corre por intervalo configurado, contado a partir
+          del km del último mantenimiento registrado de cada unidad.
         </p>
       </main>
     </div>

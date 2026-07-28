@@ -32,6 +32,9 @@ export interface CentroCosto {
   origen: CentroCostoOrigen
   es_eventual: boolean
   observaciones: string | null
+  // Destino especial "Mantenimiento" (mejoras_fase11_destino_mantenimiento.sql):
+  // su km_salida sirve como referencia automática del km de ingreso a taller.
+  es_destino_mantenimiento?: boolean
   created_at: string
   updated_at: string
 }
