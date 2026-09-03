@@ -3,7 +3,7 @@
 // Recibe el webhook del trigger enviar_notificacion_externa()
 // (tabla notificaciones, destinatario=admin) y avisa a la
 // persona administradora por correo (Resend) y/o WhatsApp
-// (CallMeBot). Cada canal se omite si no está configurado.
+// (Green API). Cada canal se omite si no está configurado.
 //
 // Secrets requeridos (supabase secrets set / dashboard):
 //   WEBHOOK_SECRET      — debe coincidir con notificaciones_push_config.webhook_secret
@@ -14,9 +14,13 @@
 //   NOTIF_EMAIL_TO      — correo de la administradora
 //   NOTIF_EMAIL_FROM    — remitente verificado en Resend (default: onboarding@resend.dev)
 //
-// Canal WhatsApp (opcional):
-//   CALLMEBOT_PHONE     — teléfono con código de país, ej. +5215512345678
-//   CALLMEBOT_APIKEY    — apikey personal de https://www.callmebot.com/blog/free-api-whatsapp-messages/
+// Canal WhatsApp (opcional, vía Green API — https://green-api.com):
+//   GREENAPI_API_URL             — host de la instancia, ej. https://7105.api.greenapi.com
+//   GREENAPI_ID_INSTANCE         — idInstance de la consola de Green API
+//   GREENAPI_API_TOKEN_INSTANCE  — apiTokenInstance de la consola de Green API
+//   GREENAPI_CHAT_ID             — destino: teléfono con código de país (+5215512345678)
+//                                   o chatId de grupo (termina en @g.us, se usa tal cual).
+//                                   El id de un grupo se obtiene con el método getChats.
 //
 // Deploy: supabase functions deploy notificar-solicitud --no-verify-jwt
 // (la autenticación la hace el header x-webhook-secret)
@@ -75,10 +79,20 @@ async function enviarCorreo(notif: NotificacionPayload, destino: { url: string |
   return { canal: 'email', enviado: true }
 }
 
+// Acepta un teléfono (se limpia y se arma como chat individual) o ya un
+// chatId de Green API (grupo @g.us o individual @c.us), tal cual.
+function toChatId(valor: string): string {
+  return valor.includes('@') ? valor : `${valor.replace(/\D/g, '')}@c.us`
+}
+
 async function enviarWhatsApp(notif: NotificacionPayload, destino: { url: string | null; label: string }) {
-  const phone = Deno.env.get('CALLMEBOT_PHONE')
-  const apikey = Deno.env.get('CALLMEBOT_APIKEY')
-  if (!phone || !apikey) return { canal: 'whatsapp', enviado: false, razon: 'sin configurar' }
+  const apiUrl = Deno.env.get('GREENAPI_API_URL')
+  const idInstance = Deno.env.get('GREENAPI_ID_INSTANCE')
+  const apiTokenInstance = Deno.env.get('GREENAPI_API_TOKEN_INSTANCE')
+  const destinoChat = Deno.env.get('GREENAPI_CHAT_ID')
+  if (!apiUrl || !idInstance || !apiTokenInstance || !destinoChat) {
+    return { canal: 'whatsapp', enviado: false, razon: 'sin configurar' }
+  }
 
   const texto = [
     `*${notif.titulo}*`,
@@ -88,13 +102,17 @@ async function enviarWhatsApp(notif: NotificacionPayload, destino: { url: string
     .filter(Boolean)
     .join('\n\n')
 
-  const url =
-    `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(phone)}` +
-    `&apikey=${encodeURIComponent(apikey)}&text=${encodeURIComponent(texto)}`
+  const chatId = toChatId(destinoChat)
+  const url = `${apiUrl.replace(/\/$/, '')}/waInstance${idInstance}/sendMessage/${apiTokenInstance}`
 
-  const res = await fetch(url)
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chatId, message: texto }),
+  })
+
   if (!res.ok) {
-    return { canal: 'whatsapp', enviado: false, razon: `CallMeBot ${res.status}: ${await res.text()}` }
+    return { canal: 'whatsapp', enviado: false, razon: `GreenAPI ${res.status}: ${await res.text()}` }
   }
   return { canal: 'whatsapp', enviado: true }
 }

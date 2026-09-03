@@ -12,6 +12,7 @@ import { supabase, type Mantenimiento, type MantenimientoTipo } from '@/lib/supa
 import Loading from '@/components/common/Loading'
 import Input from '@/components/common/Input'
 import Select from '@/components/common/Select'
+import ExportExcelButton from '@/components/common/ExportExcelButton'
 import PhotoCapture from '@/components/forms/PhotoCapture'
 import { comprimirFoto } from '@/lib/imageCompression'
 import {
@@ -36,6 +37,7 @@ import {
   isoToLocalInput,
   localInputToIso,
 } from '../shared'
+import { exportarHistorialXlsx } from './exportHistorial'
 
 const TIPO_BORDE: Record<MantenimientoTipo, string> = {
   preventivo: 'border-l-blue-400',
@@ -320,6 +322,19 @@ export default function HistorialView() {
             <p className="text-xs text-gray-500">Días prom. en taller</p>
           </div>
         </div>
+
+        {/* Exportar */}
+        <ExportExcelButton
+          deshabilitado={filtrados.length === 0}
+          onExport={() =>
+            exportarHistorialXlsx(filtrados, refacciones, vehiculos, {
+              vehiculo: filtroVehiculo,
+              tipo: filtroTipo,
+              desde: filtroDesde,
+              hasta: filtroHasta,
+            })
+          }
+        />
 
         {/* Lista */}
         {filtrados.length === 0 ? (

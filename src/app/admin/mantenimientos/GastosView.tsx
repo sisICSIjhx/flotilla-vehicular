@@ -11,6 +11,7 @@ import { supabase, type Refaccion } from '@/lib/supabase'
 import Loading from '@/components/common/Loading'
 import Input from '@/components/common/Input'
 import Select from '@/components/common/Select'
+import ExportExcelButton from '@/components/common/ExportExcelButton'
 import PhotoCapture from '@/components/forms/PhotoCapture'
 import { comprimirFoto } from '@/lib/imageCompression'
 import {
@@ -28,6 +29,7 @@ import {
   diffCampos,
   hoyDateInput,
 } from './shared'
+import { exportarRefaccionesGastosXlsx } from './exportRefaccionesGastos'
 
 // Campos auditables al editar una refacción/gasto
 const CAMPOS_AUDITABLES = [
@@ -317,6 +319,16 @@ export default function GastosView({ categoria }: { categoria: RefaccionCategori
               <span className="text-gray-500">{filtradas.length} registro(s)</span>
               <span className="font-semibold text-gray-800">Total: {formatMoneda(total)}</span>
             </div>
+
+            <ExportExcelButton
+              deshabilitado={filtradas.length === 0}
+              onExport={() =>
+                exportarRefaccionesGastosXlsx(categoria, filtradas, vehiculos, mantenimientos, {
+                  vehiculo: filtroVehiculo,
+                  busqueda,
+                })
+              }
+            />
 
             {filtradas.length === 0 ? (
               <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-8 text-center text-gray-500 text-sm">

@@ -33,6 +33,13 @@ const SECCIONES = [
     proximamente: false,
   },
   {
+    href: '/admin/gastos',
+    emoji: '💰',
+    titulo: 'Gastos',
+    descripcion: 'Gasto total y por unidad: combustible, mantenimientos y refacciones',
+    proximamente: false,
+  },
+  {
     href: '/admin/cargas-gasolina',
     emoji: '⛽',
     titulo: 'Cargas de gasolina',
