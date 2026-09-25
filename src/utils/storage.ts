@@ -3,12 +3,14 @@ import { STORAGE_BUCKET } from '@/lib/constants'
 
 const CARGAS_BUCKET = 'cargas_gasolina'
 
+// Con timestamp: si la foto se sube pero el guardado en BD falla (red móvil,
+// app en segundo plano), el reintento no choca con "The resource already exists"
 export function buildFotoPath(
   vehiculoCodigo: string,
   recorridoId: string,
   tipo: 'salida' | 'regreso'
 ): string {
-  return `vehiculos/${vehiculoCodigo}/recorridos/${recorridoId}/${tipo}.jpg`
+  return `vehiculos/${vehiculoCodigo}/recorridos/${recorridoId}/${tipo}_${Date.now()}.jpg`
 }
 
 export function buildFotoParadaPath(
@@ -16,7 +18,7 @@ export function buildFotoParadaPath(
   recorridoId: string,
   orden: number
 ): string {
-  return `vehiculos/${vehiculoCodigo}/recorridos/${recorridoId}/parada_${orden}.jpg`
+  return `vehiculos/${vehiculoCodigo}/recorridos/${recorridoId}/parada_${orden}_${Date.now()}.jpg`
 }
 
 // Con timestamp: al editar se sube una foto nueva sin pisar la anterior
