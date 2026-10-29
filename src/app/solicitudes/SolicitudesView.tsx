@@ -23,6 +23,11 @@ import Input from '@/components/common/Input'
 import PhotoCapture from '@/components/forms/PhotoCapture'
 import ErrorMessage from '@/components/common/ErrorMessage'
 import Loading from '@/components/common/Loading'
+import CentroCostoPicker, {
+  type CentroCostoValue,
+  CENTRO_COSTO_VACIO,
+  resolverCentroCostoId,
+} from '@/components/forms/CentroCostoPicker'
 
 const RESPONSABLE_KEY = 'solicitudes_responsable_nombre'
 
@@ -65,8 +70,10 @@ export default function SolicitudesView() {
   const [procesando, setProcesando] = useState<string | null>(null)
   const [errorAccion, setErrorAccion] = useState<string | null>(null)
 
-  // ── Edición admin (monto/rechazo/responsables) ──
+  // ── Edición admin (destino/monto/rechazo/responsables) ──
+  const [centros, setCentros] = useState<{ id: number; nombre: string }[]>([])
   const [editando, setEditando] = useState<SolicitudCombustibleConDetalle | null>(null)
+  const [editCentro, setEditCentro] = useState<CentroCostoValue>(CENTRO_COSTO_VACIO)
   const [editMontoAutorizado, setEditMontoAutorizado] = useState('')
   const [editMotivoRechazo, setEditMotivoRechazo] = useState('')
   const [editAutorizadoPor, setEditAutorizadoPor] = useState('')
@@ -83,6 +90,12 @@ export default function SolicitudesView() {
 
   useEffect(() => {
     setResponsable(sessionStorage.getItem(RESPONSABLE_KEY) ?? '')
+    supabase
+      .from('centros_costo')
+      .select('id, nombre')
+      .eq('estado', 'activo')
+      .order('nombre')
+      .then(({ data }) => setCentros((data ?? []) as { id: number; nombre: string }[]))
   }, [])
 
   const cargarSolicitudes = useCallback(async () => {
@@ -294,6 +307,11 @@ export default function SolicitudesView() {
   function abrirEditar(sol: SolicitudCombustibleConDetalle) {
     setErrorAccion(null)
     setEditando(sol)
+    setEditCentro({
+      mode: 'lista',
+      centroId: sol.centro_costo_id != null ? String(sol.centro_costo_id) : '',
+      nombre: '',
+    })
     setEditMontoAutorizado(sol.monto_autorizado != null ? String(sol.monto_autorizado) : '')
     setEditMotivoRechazo(sol.motivo_rechazo ?? '')
     setEditAutorizadoPor(sol.autorizado_por ?? '')
@@ -335,9 +353,14 @@ export default function SolicitudesView() {
       params.p_cargado_por = editCargadoPor.trim()
     }
 
-    const huboCambios = Object.keys(params).some((k) =>
-      !['p_solicitud_id', 'p_usuario', 'p_motivo'].includes(k)
-    )
+    const centroCambio =
+      editCentro.mode === 'manual'
+        ? Boolean(editCentro.nombre.trim())
+        : Boolean(editCentro.centroId) && editCentro.centroId !== String(editando.centro_costo_id ?? '')
+
+    const huboCambios =
+      centroCambio ||
+      Object.keys(params).some((k) => !['p_solicitud_id', 'p_usuario', 'p_motivo'].includes(k))
     if (!huboCambios) {
       setErrorEdicion('No hay cambios que guardar.')
       return
@@ -346,6 +369,7 @@ export default function SolicitudesView() {
     setGuardandoEdicion(true)
     setErrorEdicion(null)
     try {
+      if (centroCambio) params.p_centro_costo_id = await resolverCentroCostoId(editCentro)
       const { error } = await supabase.rpc('editar_solicitud_combustible_admin', params)
       if (error) throw new Error(error.message)
       setEditando(null)
@@ -762,14 +786,12 @@ export default function SolicitudesView() {
 
                   {/* ── Acciones administrativas: editar / eliminar ── */}
                   <div className="border-t border-gray-200 pt-3 flex gap-3">
-                    {['autorizada', 'rechazada', 'cargada_edenred'].includes(sol.estado) && (
-                      <button
-                        onClick={() => abrirEditar(sol)}
-                        className="flex-1 py-2 rounded-xl border border-orange-300 text-orange-700 font-semibold text-sm hover:bg-orange-50 transition-colors"
-                      >
-                        Editar
-                      </button>
-                    )}
+                    <button
+                      onClick={() => abrirEditar(sol)}
+                      className="flex-1 py-2 rounded-xl border border-orange-300 text-orange-700 font-semibold text-sm hover:bg-orange-50 transition-colors"
+                    >
+                      Editar
+                    </button>
                     <button
                       onClick={() => abrirEliminar(sol)}
                       className="flex-1 py-2 rounded-xl border border-red-300 text-red-700 font-semibold text-sm hover:bg-red-50 transition-colors"
@@ -792,9 +814,16 @@ export default function SolicitudesView() {
             <div>
               <h3 className="font-bold text-gray-800">Editar solicitud {editando.folio ?? ''}</h3>
               <p className="text-xs text-gray-500">
-                Solo se pueden corregir los datos capturados por el administrador. Los datos del conductor no son editables aquí.
+                Se puede corregir el destino y los datos capturados por el administrador. El resto de los datos del
+                conductor no son editables aquí. Cambiar el destino no modifica el recorrido vinculado.
               </p>
             </div>
+
+            <CentroCostoPicker
+              centros={centros}
+              value={editCentro}
+              onChange={setEditCentro}
+            />
 
             {['autorizada', 'cargada_edenred'].includes(editando.estado) && (
               <Input

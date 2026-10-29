@@ -6,7 +6,10 @@
       "PowerShell(npm run lint)",
       "PowerShell(if \\(-not \\(Test-Path C:\\\\vehiculos\\\\.claude\\\\launch.json\\)\\) { '{ \"version\": \"0.0.1\", \"configurations\": [ { \"name\": \"dev\", \"runtimeExecutable\": \"npm\", \"runtimeArgs\": [\"run\", \"dev\"], \"port\": 3000 } ] }' | Out-File -Encoding utf8 C:\\\\vehiculos\\\\.claude\\\\launch.json }; Get-Content C:\\\\vehiculos\\\\.claude\\\\launch.json)",
       "mcp__Claude_Preview__preview_start",
-      "mcp__Claude_in_Chrome__list_connected_browsers"
+      "mcp__Claude_in_Chrome__list_connected_browsers",
+      "PowerShell(npx tsc --noEmit -p . 2>&1)",
+      "PowerShell(npx eslint src/app/admin/cargas-gasolina/CargasGasolinaAdminView.tsx)",
+      "PowerShell(npx tsc --noEmit -p . 2>&1 | Select-String \"cargas-gasolina\"; \"exit: $LASTEXITCODE\")"
     ]
   }
 }
