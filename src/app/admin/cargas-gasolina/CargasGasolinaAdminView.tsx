@@ -6,27 +6,29 @@ import { supabase } from '@/lib/supabase'
 import { combustibleLabel, COMBUSTIBLE_NIVELES } from '@/lib/constants'
 import { formatFecha, formatMoneda, formatDecimal } from '@/utils/formatters'
 import Loading from '@/components/common/Loading'
+import ExportButtons from '@/components/common/ExportButtons'
 import { getPublicUrlCarga } from '@/utils/storage'
+import { type CargaGasolina, type TipoCarga } from '@/app/historico/types'
+import { exportarCargasCsv, exportarCargasXlsx, exportarCargasPdf } from '@/app/historico/exportHistorico'
+import { descargarFotosZip, listarFotosCargas, TIPOS_FOTO, TODOS_TIPOS_FOTO, type TipoFoto } from './descargarFotosZip'
 
-interface CargaRow {
-  id: string
-  vehiculo_codigo: string
-  placa: string | null
-  apodo: string | null
-  conductor: string
-  km_antes: number
-  combustible_antes: number
-  combustible_despues: number
-  litros_cargados: number
-  precio_litro: number
-  costo_total: number
-  foto_tablero_antes_path: string | null
-  foto_tablero_despues_path: string | null
-  foto_ticket_path: string | null
-  fecha_carga: string
-  recorrido_id: string | null
-  observaciones: string | null
+// Misma forma que en Histórico para reutilizar los exportadores (CSV / Excel / PDF)
+type CargaRow = CargaGasolina
+
+// PostgREST devuelve máximo 1000 filas por consulta: se pagina para traer todas
+const TAMANO_LOTE = 1000
+
+// A partir de esta cantidad de fotos se pide confirmación antes de armar el ZIP
+const FOTOS_CONFIRMAR = 300
+
+const TIPO_LABEL: Record<TipoCarga, string> = {
+  todas: 'Todas',
+  en_recorrido: 'En recorrido',
+  fuera_recorrido: 'Fuera de recorrido',
 }
+
+const CLASE_FILTRO =
+  'w-full rounded-xl border border-gray-300 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-green-500'
 
 interface EdicionForm {
   fecha_carga: string
@@ -60,6 +62,13 @@ export default function CargasGasolinaAdminView() {
   const [cargas, setCargas] = useState<CargaRow[]>([])
   const [vehiculos, setVehiculos] = useState<{ codigo: string; apodo: string | null; placa: string | null }[]>([])
   const [filtroVehiculo, setFiltroVehiculo] = useState('')
+  const [filtroDesde, setFiltroDesde] = useState('')
+  const [filtroHasta, setFiltroHasta] = useState('')
+  const [filtroConductor, setFiltroConductor] = useState('')
+  const [filtroTipo, setFiltroTipo] = useState<TipoCarga>('todas')
+  const [tiposFoto, setTiposFoto] = useState<TipoFoto[]>(TODOS_TIPOS_FOTO)
+  const [progresoZip, setProgresoZip] = useState<{ hechas: number; total: number } | null>(null)
+  const [errorZip, setErrorZip] = useState('')
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState('')
 
@@ -79,56 +88,75 @@ export default function CargasGasolinaAdminView() {
     setError('')
 
     try {
-      const [{ data: vehs }, { data: rawCargas, error: errCargas }] = await Promise.all([
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async function traerCargas(): Promise<any[]> {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const todas: any[] = []
+        for (let desde = 0; ; desde += TAMANO_LOTE) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data, error: errCargas } = await (supabase.from('cargas_gasolina') as any)
+            .select(`
+              id,
+              vehiculo_codigo,
+              km_antes,
+              combustible_antes,
+              combustible_despues,
+              litros_cargados,
+              precio_litro,
+              foto_tablero_antes_path,
+              foto_tablero_despues_path,
+              foto_ticket_path,
+              created_at,
+              recorrido_id,
+              observaciones,
+              conductores!conductor_id ( nombre ),
+              vehiculos!vehiculo_codigo ( placa, apodo, modelo ),
+              recorridos ( centros_costo ( nombre ) )
+            `)
+            .order('created_at', { ascending: false })
+            .order('id')
+            .range(desde, desde + TAMANO_LOTE - 1)
+
+          if (errCargas) throw new Error(errCargas.message)
+          todas.push(...(data ?? []))
+          if ((data ?? []).length < TAMANO_LOTE) break
+        }
+        return todas
+      }
+
+      const [{ data: vehs }, rawCargas] = await Promise.all([
         supabase
           .from('vehiculos')
           .select('codigo, apodo, placa')
           .order('codigo'),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (supabase.from('cargas_gasolina') as any)
-          .select(`
-            id,
-            vehiculo_codigo,
-            km_antes,
-            combustible_antes,
-            combustible_despues,
-            litros_cargados,
-            precio_litro,
-            foto_tablero_antes_path,
-            foto_tablero_despues_path,
-            foto_ticket_path,
-            created_at,
-            recorrido_id,
-            observaciones,
-            conductores!conductor_id ( nombre ),
-            vehiculos!vehiculo_codigo ( placa, apodo )
-          `)
-          .order('created_at', { ascending: false }),
+        traerCargas(),
       ])
-
-      if (errCargas) throw new Error(errCargas.message)
 
       setVehiculos(vehs ?? [])
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const mapped: CargaRow[] = (rawCargas ?? []).map((r: any) => ({
+      const mapped: CargaRow[] = rawCargas.map((r: any) => ({
         id: r.id,
         vehiculo_codigo: r.vehiculo_codigo,
         placa: r.vehiculos?.placa ?? null,
         apodo: r.vehiculos?.apodo ?? null,
+        modelo: r.vehiculos?.modelo ?? null,
         conductor: r.conductores?.nombre ?? '—',
+        recorrido_id: r.recorrido_id,
+        destino: r.recorridos?.centros_costo?.nombre ?? null,
         km_antes: r.km_antes,
         combustible_antes: r.combustible_antes,
         combustible_despues: r.combustible_despues,
-        litros_cargados: r.litros_cargados,
-        precio_litro: r.precio_litro,
-        costo_total: r.litros_cargados * r.precio_litro,
+        litros_cargados: Number(r.litros_cargados),
+        precio_litro: Number(r.precio_litro),
+        costo_total: Number(r.litros_cargados) * Number(r.precio_litro),
         foto_tablero_antes_path: r.foto_tablero_antes_path ?? null,
         foto_tablero_despues_path: r.foto_tablero_despues_path ?? null,
-        foto_ticket_path: r.foto_ticket_path,
-        fecha_carga: r.created_at,
-        recorrido_id: r.recorrido_id,
+        foto_ticket_path: r.foto_ticket_path ?? null,
         observaciones: r.observaciones ?? null,
+        fecha_carga: r.created_at,
+        fecha_siguiente_carga: null,
+        km_siguiente_carga: null,
       }))
 
       setCargas(mapped)
@@ -252,9 +280,100 @@ export default function CargasGasolinaAdminView() {
     }
   }
 
-  const cargasFiltradas = filtroVehiculo
-    ? cargas.filter(c => c.vehiculo_codigo === filtroVehiculo)
-    : cargas
+  // ── Filtros (se aplican en el cliente sobre todas las cargas) ─────────────
+  const desdeMs = filtroDesde ? new Date(filtroDesde + 'T00:00:00').getTime() : null
+  const hastaMs = filtroHasta ? new Date(filtroHasta + 'T23:59:59.999').getTime() : null
+
+  const cargasFiltradas = cargas.filter(c => {
+    if (filtroVehiculo && c.vehiculo_codigo !== filtroVehiculo) return false
+    if (filtroConductor && c.conductor !== filtroConductor) return false
+    if (filtroTipo === 'en_recorrido' && !c.recorrido_id) return false
+    if (filtroTipo === 'fuera_recorrido' && c.recorrido_id) return false
+    const t = new Date(c.fecha_carga).getTime()
+    if (desdeMs != null && t < desdeMs) return false
+    if (hastaMs != null && t > hastaMs) return false
+    return true
+  })
+
+  const conductores = [...new Set(cargas.map(c => c.conductor).filter(n => n && n !== '—'))].sort()
+  const hayFiltros = Boolean(filtroVehiculo || filtroDesde || filtroHasta || filtroConductor || filtroTipo !== 'todas')
+  const totalLitros = cargasFiltradas.reduce((acc, c) => acc + c.litros_cargados, 0)
+  const totalCosto = cargasFiltradas.reduce((acc, c) => acc + c.costo_total, 0)
+  const totalFotos = listarFotosCargas(cargasFiltradas, tiposFoto).length
+
+  function alternarTipoFoto(tipo: TipoFoto) {
+    setErrorZip('')
+    setTiposFoto(prev => prev.includes(tipo) ? prev.filter(t => t !== tipo) : [...prev, tipo])
+  }
+  const idMasReciente = cargas[0]?.id
+
+  function limpiarFiltros() {
+    setFiltroVehiculo('')
+    setFiltroDesde('')
+    setFiltroHasta('')
+    setFiltroConductor('')
+    setFiltroTipo('todas')
+  }
+
+  // ── Descargas ─────────────────────────────────────────────────────────────
+  function exportarCargas(formato: 'csv' | 'xlsx' | 'pdf') {
+    if (cargasFiltradas.length === 0) {
+      throw new Error('No hay cargas para exportar con los filtros seleccionados.')
+    }
+    if (formato === 'csv') exportarCargasCsv(cargasFiltradas)
+    else if (formato === 'xlsx') exportarCargasXlsx(cargasFiltradas)
+    else {
+      exportarCargasPdf(cargasFiltradas, {
+        fechaInicio: filtroDesde || 'Sin límite',
+        fechaFin: filtroHasta || 'Sin límite',
+        vehiculo: filtroVehiculo,
+        conductor: filtroConductor,
+        tipo: TIPO_LABEL[filtroTipo],
+      })
+    }
+  }
+
+  async function descargarFotos() {
+    if (progresoZip) return
+    setErrorZip('')
+
+    if (totalFotos > FOTOS_CONFIRMAR && !window.confirm(
+      `Se van a descargar ${totalFotos} fotos de ${cargasFiltradas.length} cargas. ` +
+      'Puede tardar varios minutos; conviene acotar el rango de fechas. ¿Continuar?'
+    )) return
+
+    // Nombre del ZIP con el rango filtrado: fotos_cargas_gasolina_2026-11-01_a_2026-11-12
+    const rango = filtroDesde || filtroHasta
+      ? `_${filtroDesde || 'inicio'}_a_${filtroHasta || 'hoy'}`
+      : ''
+    // Si no van todos los tipos, se agregan al nombre: fotos_cargas_gasolina_ticket_...
+    const tiposNombre = tiposFoto.length < TIPOS_FOTO.length
+      ? '_' + TIPOS_FOTO.filter(t => tiposFoto.includes(t.tipo)).map(t => t.sufijo).join('_')
+      : ''
+    const base = `fotos_cargas_gasolina${tiposNombre}${filtroVehiculo ? `_${filtroVehiculo}` : ''}${rango}`
+
+    setProgresoZip({ hechas: 0, total: totalFotos })
+    try {
+      const { total, fallidas } = await descargarFotosZip(
+        cargasFiltradas,
+        base,
+        tiposFoto,
+        (hechas, tot) => setProgresoZip({ hechas, total: tot })
+      )
+      if (fallidas > 0) {
+        setErrorZip(
+          `${fallidas} de ${total} fotos no se pudieron descargar; el ZIP incluye la lista en _fotos_no_descargadas.txt.`
+        )
+      } else {
+        setMensajeExito(`ZIP generado con ${total} fotos.`)
+        setTimeout(() => setMensajeExito(''), 3000)
+      }
+    } catch (err) {
+      setErrorZip(err instanceof Error ? err.message : 'Error al generar el ZIP de fotos')
+    } finally {
+      setProgresoZip(null)
+    }
+  }
 
   if (cargando) {
     return (
@@ -294,36 +413,170 @@ export default function CargasGasolinaAdminView() {
           </div>
         )}
 
-        {/* Filtro */}
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4">
-          <label className="block text-sm font-medium text-gray-700 mb-1">Filtrar por vehículo</label>
-          <select
-            value={filtroVehiculo}
-            onChange={e => setFiltroVehiculo(e.target.value)}
-            className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-          >
-            <option value="">Todos los vehículos ({cargas.length})</option>
-            {vehiculos.map(v => {
-              const count = cargas.filter(c => c.vehiculo_codigo === v.codigo).length
-              if (count === 0) return null
-              const label = [v.codigo, v.apodo, v.placa].filter(Boolean).join(' · ')
-              return (
-                <option key={v.codigo} value={v.codigo}>
-                  {label} ({count})
-                </option>
-              )
-            })}
-          </select>
+        {/* Filtros */}
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-sm font-semibold text-gray-700">Filtros</h2>
+            {hayFiltros && (
+              <button
+                type="button"
+                onClick={limpiarFiltros}
+                className="text-xs font-medium text-green-700 hover:underline"
+              >
+                Limpiar filtros
+              </button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <label className="flex flex-col gap-1 text-xs text-gray-500 font-medium min-w-0">
+              Desde
+              <input
+                type="date"
+                value={filtroDesde}
+                max={filtroHasta || undefined}
+                onChange={e => setFiltroDesde(e.target.value)}
+                className={CLASE_FILTRO}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-xs text-gray-500 font-medium min-w-0">
+              Hasta
+              <input
+                type="date"
+                value={filtroHasta}
+                min={filtroDesde || undefined}
+                onChange={e => setFiltroHasta(e.target.value)}
+                className={CLASE_FILTRO}
+              />
+            </label>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <label className="flex flex-col gap-1 text-xs text-gray-500 font-medium min-w-0">
+              Vehículo
+              <select
+                value={filtroVehiculo}
+                onChange={e => setFiltroVehiculo(e.target.value)}
+                className={CLASE_FILTRO}
+              >
+                <option value="">Todos los vehículos ({cargas.length})</option>
+                {vehiculos.map(v => {
+                  const count = cargas.filter(c => c.vehiculo_codigo === v.codigo).length
+                  if (count === 0) return null
+                  const label = [v.codigo, v.apodo, v.placa].filter(Boolean).join(' · ')
+                  return (
+                    <option key={v.codigo} value={v.codigo}>
+                      {label} ({count})
+                    </option>
+                  )
+                })}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-xs text-gray-500 font-medium min-w-0">
+              Conductor
+              <select
+                value={filtroConductor}
+                onChange={e => setFiltroConductor(e.target.value)}
+                className={CLASE_FILTRO}
+              >
+                <option value="">Todos los conductores</option>
+                {conductores.map(n => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-xs text-gray-500 font-medium min-w-0">
+              Tipo
+              <select
+                value={filtroTipo}
+                onChange={e => setFiltroTipo(e.target.value as TipoCarga)}
+                className={CLASE_FILTRO}
+              >
+                <option value="todas">Todos los tipos</option>
+                <option value="en_recorrido">En recorrido</option>
+                <option value="fuera_recorrido">Fuera de recorrido</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        {/* Resumen de lo filtrado */}
+        <div className="grid grid-cols-3 gap-3">
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm px-3 py-3 text-center">
+            <p className="text-lg font-bold text-gray-800">{cargasFiltradas.length}</p>
+            <p className="text-xs text-gray-500">Cargas</p>
+          </div>
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm px-3 py-3 text-center">
+            <p className="text-lg font-bold text-gray-800">{formatDecimal(totalLitros)} L</p>
+            <p className="text-xs text-gray-500">Litros</p>
+          </div>
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm px-3 py-3 text-center">
+            <p className="text-lg font-bold text-green-700">{formatMoneda(totalCosto)}</p>
+            <p className="text-xs text-gray-500">Total gastado</p>
+          </div>
+        </div>
+
+        {/* Descargas: reporte (CSV / Excel / PDF) y fotos (ZIP) */}
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-start gap-x-4 gap-y-2">
+            <ExportButtons
+              onCsv={() => exportarCargas('csv')}
+              onXlsx={() => exportarCargas('xlsx')}
+              onPdf={() => exportarCargas('pdf')}
+              deshabilitado={cargasFiltradas.length === 0}
+            />
+            <button
+              type="button"
+              onClick={descargarFotos}
+              disabled={totalFotos === 0 || progresoZip !== null}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium border border-green-300 bg-white text-green-700 hover:bg-green-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {progresoZip ? (
+                <span className="w-3.5 h-3.5 border-2 border-green-600 border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+              )}
+              {progresoZip
+                ? `Descargando fotos ${progresoZip.hechas}/${progresoZip.total}…`
+                : `Fotos en ZIP (${totalFotos})`}
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <span className="text-xs text-gray-500 shrink-0">Fotos a incluir:</span>
+            {TIPOS_FOTO.map(t => (
+              <label key={t.tipo} className="inline-flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={tiposFoto.includes(t.tipo)}
+                  onChange={() => alternarTipoFoto(t.tipo)}
+                  disabled={progresoZip !== null}
+                  className="w-4 h-4 rounded border-gray-300 accent-green-600"
+                />
+                {t.label}
+              </label>
+            ))}
+          </div>
+          {tiposFoto.length === 0 && (
+            <p className="text-xs text-amber-600">Selecciona al menos un tipo de foto para descargar el ZIP.</p>
+          )}
+          <p className="text-xs text-gray-400">
+            Las descargas incluyen solo las cargas filtradas. Las fotos se nombran con el vehículo y la fecha de la carga.
+          </p>
+          {errorZip && <p className="text-xs text-red-600">{errorZip}</p>}
         </div>
 
         {/* Lista */}
         <div className="space-y-3">
           {cargasFiltradas.length === 0 && (
-            <div className="text-center py-12 text-gray-400">Sin registros</div>
+            <div className="text-center py-12 text-gray-400">
+              {hayFiltros ? 'Sin cargas con esos filtros' : 'Sin registros'}
+            </div>
           )}
 
-          {cargasFiltradas.map((carga, idx) => {
-            const esPrimero = idx === 0
+          {cargasFiltradas.map((carga) => {
+            const esPrimero = carga.id === idMasReciente
             return (
               <div
                 key={carga.id}

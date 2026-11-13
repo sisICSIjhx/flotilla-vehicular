@@ -9,7 +9,8 @@
       "mcp__Claude_in_Chrome__list_connected_browsers",
       "PowerShell(npx tsc --noEmit -p . 2>&1)",
       "PowerShell(npx eslint src/app/admin/cargas-gasolina/CargasGasolinaAdminView.tsx)",
-      "PowerShell(npx tsc --noEmit -p . 2>&1 | Select-String \"cargas-gasolina\"; \"exit: $LASTEXITCODE\")"
+      "PowerShell(npx tsc --noEmit -p . 2>&1 | Select-String \"cargas-gasolina\"; \"exit: $LASTEXITCODE\")",
+      "Bash(grep -i -E \"^\\(jszip|fflate|client-zip|pako\\)$\")"
     ]
   }
 }

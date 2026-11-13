@@ -83,6 +83,13 @@ export function getPublicUrlCarga(path: string): string {
   return data.publicUrl
 }
 
+/** Descarga el archivo de una foto de carga (para empaquetarla en un ZIP). */
+export async function descargarFotoCarga(path: string): Promise<Blob> {
+  const { data, error } = await supabase.storage.from(CARGAS_BUCKET).download(path)
+  if (error || !data) throw new Error(`Error al descargar foto: ${error?.message ?? 'sin datos'}`)
+  return data
+}
+
 // ── Evidencias de carga Edenred ────────────────────────────
 const EDENRED_BUCKET = 'edenred'
 
